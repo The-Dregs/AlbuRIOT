@@ -2,6 +2,11 @@ using UnityEngine;
 
 public class ThirdPersonCameraOrbit : MonoBehaviour
 {
+	private float defaultPitch;
+	public float pitchLerpSpeed = 5f;
+	public float yawLerpSpeed = 10f;
+	private bool wasRightMouseHeld = false;
+	private bool isLerpingToPlayer = false;
 	[Header("Orbit Settings")]
 	public Transform target;           // usually the Player root
 	public Transform cameraTransform;  // the actual Camera
@@ -32,13 +37,15 @@ public class ThirdPersonCameraOrbit : MonoBehaviour
 		}
 		Vector3 localPos = cameraTransform.localPosition;
 		targetDistance = -localPos.z; // expecting camera behind pivot (negative z)
+		defaultPitch = 10f; // Set your preferred default pitch here (e.g., 10 degrees down)
+		pitch = defaultPitch;
 	}
 
 	void LateUpdate()
 	{
 		if (target == null || cameraTransform == null) return;
 
-		bool rightMouseHeld = Input.GetMouseButton(1);
+	bool rightMouseHeld = Input.GetMouseButton(1);
 		float mouseX = Input.GetAxis("Mouse X") * mouseSensitivity * Time.deltaTime;
 		float mouseY = Input.GetAxis("Mouse Y") * mouseSensitivity * Time.deltaTime;
 
@@ -46,19 +53,40 @@ public class ThirdPersonCameraOrbit : MonoBehaviour
 		{
 			yaw += mouseX;
 			pitch = Mathf.Clamp(pitch - mouseY, minPitch, maxPitch);
+			isLerpingToPlayer = false;
 		}
 		else
 		{
-			// Only update yaw if the angle difference is small (prevents sudden flips)
-			float targetYaw = target.eulerAngles.y;
-			float angleDiff = Mathf.DeltaAngle(yaw, targetYaw);
-			if (Mathf.Abs(angleDiff) < 90f) // Only snap if not going backwards
+			// On right mouse release, start lerping
+			if (wasRightMouseHeld)
 			{
-				yaw = targetYaw;
+				isLerpingToPlayer = true;
 			}
 			// Rotate player (target) with mouse X
 			target.Rotate(Vector3.up, mouseX * 2f); // 2f is a turn speed multiplier, adjust as needed
+			if (isLerpingToPlayer)
+			{
+				// Smoothly lerp pitch and yaw to player-aligned values
+				float targetYaw = target.eulerAngles.y;
+				float targetPitch = defaultPitch;
+				yaw = Mathf.LerpAngle(yaw, targetYaw, yawLerpSpeed * Time.deltaTime);
+				pitch = Mathf.Lerp(pitch, targetPitch, pitchLerpSpeed * Time.deltaTime);
+				// Stop lerping if close enough
+				if (Mathf.Abs(Mathf.DeltaAngle(yaw, targetYaw)) < 0.1f && Mathf.Abs(pitch - targetPitch) < 0.1f)
+				{
+					yaw = targetYaw;
+					pitch = targetPitch;
+					isLerpingToPlayer = false;
+				}
+			}
+			else
+			{
+				// Snap to player
+				yaw = target.eulerAngles.y;
+				pitch = defaultPitch;
+			}
 		}
+		wasRightMouseHeld = rightMouseHeld;
 
 		transform.rotation = Quaternion.Euler(pitch, yaw, 0f);
 

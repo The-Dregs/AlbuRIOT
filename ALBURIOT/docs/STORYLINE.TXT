@@ -1,0 +1,97 @@
+Narrative
+Long before written history and colonial conquest reached the shores of the Philippines, the islands thrived under the quiet balance of spirits and nature. Towering mountains, dense forests, and deep oceans were home to powerful beings that kept the world in harmony. Among the most feared and revered were two celestial titans: Minokawa, the colossal bird whose wings could eclipse the sun, and Bakunawa, the mighty sea serpent believed to devour the moon. These beings, though chaotic by nature, maintained a rhythm that kept both the physical and spiritual realms in balance.
+That peace was shattered when foreign forces arrived—explorers, conquerors, and mercenaries lured by tales of god-like creatures that controlled the heavens. Their greed drove them to hunt Minokawa and Bakunawa, hoping to steal divine power from the stars and the sea. Though their campaigns failed, the damage was irreversible. Enraged, the two titans turned their wrath upon the islands. Their cosmic battle fractured the fabric of the spirit world, unleashing an age of chaos.
+A Mythic Crisis Across the Three Islands
+As the war between Minokawa and Bakunawa escalated, the natural order crumbled. Mythological creatures, once kept in check by divine balance, began to run rampant.
+In Luzon, the forests fell silent as the Kapre abandoned their watch and became destroyers. Tiyanak swarmed villages, their cries haunting the night. In the Visayas, Aswang hunted without fear of daylight, and Manananggal soared through skies no longer guarded by the sun. In Mindanao, Tikbalang twisted paths into endless mazes, trapping entire towns. The once-benevolent Diwata, shaken by the chaos, vanished deep into the mountains.
+Every corner of the Philippines began to drown in mythic unrest. What were once bedtime stories have become waking nightmares.
+The Albularyo’s Calling
+In the midst of this spiritual collapse, a new force rises. You are an Albularyo—a healer, spirit-binder, and guardian of ancestral knowledge. Called upon by the elders of Luzon, Visayas, and Mindanao, you and a team of fellow Albularyo are tasked with restoring the balance between the mortal and spirit worlds.
+Your mission is not to destroy these creatures, but to understand them and reclaim what was lost. The last hope lies in finding Manaul, the forgotten divine bird of peace, once capable of ending wars with a single call. To awaken Manaul, you must journey across the fractured islands, face corrupted spirits, and uncover the true origin of the conflict.
+The spirits will not surrender easily. The world remembers the sins of the invaders, and the darkness they left behind still lingers.
+Gameplay Overview
+AlbuRiot is a multiplayer action-survival game that blends traditional Filipino folklore with an immersive monster-hunting experience. Designed as a simpler, more accessible version of games like Monster Hunter, it focuses on tight co-op gameplay, exploration, and tactical encounters.
+Players explore three distinct regions: Luzon, Visayas, and Mindanao. Each island offers unique landscapes, weather, and folklore-based creatures. The map is procedurally generated using Perlin noise, ensuring a fresh experience with every expedition.
+You and up to three other players can team up to take on mythological threats using behavior-based AI. Defeated creatures grant temporary powers, such as flight from the Manananggal or supernatural speed from the Tikbalang, which add depth and strategy to combat and traversal.
+Aside from hunting, players interact with spirit NPCs, uncover hidden ruins, and gather lore fragments to understand the mythological past of the islands. Choices and outcomes shape how local spirits respond—some may assist, while others may become hostile.
+
+
+
+
+
+—->
+
+PROLOGUE: The Awakening (Tutorial / Intro Sequence)
+Setting: A Rural Fishing Village in Visayas
+You begin not as a hero, but as a simple villager, a young fisherman, herbalist, or farmer (player chooses background) living in peace in a coastal barangay. You’ve heard the old stories: of Aswang in the woods, Diwata in the rivers, and Kapre in the mountains, but to you, they were just bedtime tales, faded by time and forgotten by most.
+But one night, the sky tears open. A deafening roar rolls across the sea. The moon flickers like a candle in the wind. You awaken to chaos: violent tides, monstrous cries, and twisted shadows climbing from the trees.
+Your village is destroyed.
+As you run for your life, you are pulled into the dreamlike realm of the spirit world, where an ancient Diwata confronts you. She reveals the truth: you are a descendant of a long-forgotten line of Albularyo, guardians of the balance between the physical and spiritual realms.
+You are given a choice: to return to the world as it crumbles... or to awaken the gift within you.
+You choose to fight.
+With your first ritual performed in desperation, the Diwata marks you as Albularyo, and tasks you with a sacred mission: restore the balance, awaken Manaul, and prevent the collapse of the islands.
+From this point, your journey as an Albularyo begins.
+CHAPTER 1: Island in Turmoil (Luzon Region)
+Story Beat:
+You begin in a small, ruined village at the edge of a cursed forest in Luzon. An elder Diwata calls on the Albularyo after sensing a cosmic imbalance that even the gods fear. You are sent to investigate why the spirits have turned hostile and why the sun no longer rises properly.
+Objectives:
+Tutorial: Learn movement, combat, crafting, and basic spiritual rituals
+Encounter corrupted creatures: Kapre, Tiyanak, Nuno sa Punso
+Temporary powers: Strength from Kapre, confusion scream from Tiyanak
+Visit shrine ruins to unlock the Diwata’s Blessing (base upgrade system)
+First major hunt: Raging Tikbalang (mini-boss that curses the forest paths)
+Boss Battle: Feral Aswang Queen terrorizing the region’s remaining survivors
+Narrative Unlock:
+Discover scrolls and carvings about Minokawa and Bakunawa
+Hints about Manaul—the divine bird who once kept them in balance
+Learn the invaders' failed hunt and the breaking of the spirit world
+
+
+CHAPTER 2: Flooded Faith (Visayas Region)
+Story Beat:
+After cleansing Luzon’s shrine, a vision of a submerged temple in the Visayas calls to the Albularyo. The sea swells unnaturally, and mythological sea spirits are now feeding on the chaos.
+Objectives:
+Introduce water-based traversal, fishing mechanics, and diving zones
+Encounter Manananggal, Sigbin, Wakwak, and sea-dwelling Berberoka
+Powers: Night vision (Wakwak), stealth (Sigbin), water breathing (Berberoka)
+Mid-boss: Corrupted Diwata, driven mad by exposure to foreign magic
+Main boss: Tidecaller Bakunawa Fragment (a portion of Bakunawa’s energy left behind after the invader war)
+
+Narrative Unlock:
+Find journals of surviving foreign invaders still trying to exploit chaos
+Reveal Manaul’s last known location: a lost altar buried deep in Mindanao
+Clues point to stolen artifacts scattered in shrines across the islands
+
+
+CHAPTER 3: Ashes of Ancestry (Mindanao Region)
+Story Beat:
+Mindanao’s mountains tremble. Manaul’s last known shrine lies hidden here, but the path is sealed by spirit guardians enraged by the celestial war. This is the most sacred and war-torn land.
+Objectives:
+New mechanics: Climbing cliffs, lightning storms, shrine puzzle gates
+Encounter Tamaraw spirits, Paniki swarms, Bal-Bal, Amomongo
+Powers: Mountain speed (Tamaraw), corpse-detection (Bal-Bal), thunder resistance
+Mid-boss: Shadow-Touched Diwata, protector of the gate to Manaul
+Main boss: Skyburnt Minokawa Fragment, corrupted fragment of the great bird’s essence
+Narrative Unlock:
+Reunite the three sacred artifacts stolen by the invaders
+Restore the Sky Mirror, a ritual tool used to summon celestial beings
+Perform the Ritual of Calling to awaken Manaul
+CHAPTER 4: The Final Reckoning (Sky Temple – Endgame)
+Story Beat:
+Manaul answers the call but warns that to end the war, you must confront both Minokawa and Bakunawa, now fully enraged in the sky realm. Their conflict threatens to collapse both the physical and spirit worlds.
+Objectives:
+Ascend to the Celestial Battlefield via a floating shrine system
+Face off against both titans in multi-phase boss fights:
+Dodge Minokawa’s solar wind attacks
+Survive Bakunawa’s tsunami-scale tidal slams
+Final co-op trial: Team must purify both titans, not destroy them
+Choices affect ending: purification vs. forced banishmen
+Game Endings
+1. Balance Restored
+Manaul pacifies both titans. Creatures return to their roles. The spirit world mends.
+2. Sacrifice Ending
+An Albularyo (random player or player-chosen) must offer their spirit to seal the war.
+3. Failed Purification
+The world survives, but many creatures remain twisted. Balance is only partially restored.
+
+

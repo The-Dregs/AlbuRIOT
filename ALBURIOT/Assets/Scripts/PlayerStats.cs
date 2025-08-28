@@ -18,19 +18,14 @@ public class PlayerStats : MonoBehaviour
     {
         if (currentStamina < maxStamina)
         {
-            int before = currentStamina;
             currentStamina += Mathf.RoundToInt(staminaRegenRate * Time.deltaTime);
             if (currentStamina > maxStamina) currentStamina = maxStamina;
-            if (currentStamina != before)
-                Debug.Log($"Stamina regen: {before} -> {currentStamina}");
         }
     }
 
     public void TakeDamage(int amount)
     {
-        int before = currentHealth;
         currentHealth -= amount;
-        Debug.Log($"Player took {amount} damage: {before} -> {currentHealth}");
         if (currentHealth < 0) currentHealth = 0;
     }
 
@@ -38,12 +33,9 @@ public class PlayerStats : MonoBehaviour
     {
         if (currentStamina >= amount)
         {
-            int before = currentStamina;
             currentStamina -= amount;
-            Debug.Log($"Stamina used: {before} -> {currentStamina}");
             return true;
         }
-        Debug.Log("Tried to use stamina but not enough!");
         return false;
     }
 

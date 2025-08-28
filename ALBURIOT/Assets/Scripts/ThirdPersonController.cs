@@ -37,10 +37,11 @@ public class ThirdPersonController : MonoBehaviour
 		float h = Input.GetAxisRaw("Horizontal");
 		float v = Input.GetAxisRaw("Vertical");
 
-		// Movement relative to camera yaw
+		// Movement relative to camera yaw, unless in free look (right mouse held)
 		Vector3 camForward = Vector3.forward;
 		Vector3 camRight = Vector3.right;
-		if (cameraPivot != null)
+		bool rightMouseHeld = Input.GetMouseButton(1);
+		if (!rightMouseHeld && cameraPivot != null)
 		{
 			Vector3 forward = cameraPivot.forward;
 			forward.y = 0f;
@@ -50,6 +51,12 @@ public class ThirdPersonController : MonoBehaviour
 			right.Normalize();
 			camForward = forward;
 			camRight = right;
+		}
+		else
+		{
+			// Use player's own forward/right
+			camForward = transform.forward;
+			camRight = transform.right;
 		}
 
 		Vector3 move = camForward * v + camRight * h;

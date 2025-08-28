@@ -13,6 +13,12 @@ public class EnemyStats : MonoBehaviour
     public void TakeDamage(int amount)
     {
         currentHealth -= amount;
+        // Show health bar if EnemyHealthBar exists
+        EnemyHealthBar healthBar = GetComponent<EnemyHealthBar>();
+        if (healthBar != null)
+        {
+            healthBar.ShowHealthBar();
+        }
         if (currentHealth <= 0)
         {
             Die();

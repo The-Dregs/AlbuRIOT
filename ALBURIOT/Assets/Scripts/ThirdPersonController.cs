@@ -62,11 +62,16 @@ public class ThirdPersonController : MonoBehaviour
 		Vector3 move = camForward * v + camRight * h;
 		if (move.sqrMagnitude > 1f) move.Normalize();
 
-		// Rotate to face movement direction
-		if (move.sqrMagnitude > 0.0001f)
+		// Rotate to face movement direction, but NOT when moving backwards
+		if (move.sqrMagnitude > 0.0001f && v >= 0f)
 		{
-			Quaternion targetRot = Quaternion.LookRotation(move, Vector3.up);
-			transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, rotationSpeed * Time.deltaTime);
+			// Only use the forward component for rotation
+			Vector3 forwardMove = camForward * Mathf.Max(0f, v) + camRight * h;
+			if (forwardMove.sqrMagnitude > 0.0001f)
+			{
+				Quaternion targetRot = Quaternion.LookRotation(forwardMove, Vector3.up);
+				transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, rotationSpeed * Time.deltaTime);
+			}
 		}
 
 		// Horizontal move

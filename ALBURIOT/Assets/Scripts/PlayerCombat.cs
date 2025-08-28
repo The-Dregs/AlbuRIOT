@@ -2,7 +2,6 @@ using UnityEngine;
 
 public class PlayerCombat : MonoBehaviour
 {
-    public int attackDamage = 25;
     public float attackRange = 2f;
     public float attackRate = 1f;
     public int attackStaminaCost = 20;
@@ -47,7 +46,7 @@ public class PlayerCombat : MonoBehaviour
             if (enemyStats != null)
             {
                 Debug.Log($"Hit enemy: {enemyStats.gameObject.name}");
-                enemyStats.TakeDamage(attackDamage);
+                enemyStats.TakeDamage(stats.baseDamage);
             }
         }
     }

@@ -7,6 +7,7 @@ public class PlayerStats : MonoBehaviour
     public int maxStamina = 100;
     public int currentStamina;
     public float staminaRegenRate = 10f;
+    public int baseDamage = 25;
 
     void Awake()
     {
@@ -43,5 +44,23 @@ public class PlayerStats : MonoBehaviour
     {
         currentHealth += amount;
         if (currentHealth > maxHealth) currentHealth = maxHealth;
+    }
+
+    public void ApplyEquipment(Equipment item)
+    {
+        maxHealth += item.healthModifier;
+        maxStamina += item.staminaModifier;
+        baseDamage += item.damageModifier;
+        currentHealth = Mathf.Min(currentHealth, maxHealth);
+        currentStamina = Mathf.Min(currentStamina, maxStamina);
+    }
+
+    public void RemoveEquipment(Equipment item)
+    {
+        maxHealth -= item.healthModifier;
+        maxStamina -= item.staminaModifier;
+        baseDamage -= item.damageModifier;
+        currentHealth = Mathf.Min(currentHealth, maxHealth);
+        currentStamina = Mathf.Min(currentStamina, maxStamina);
     }
 }

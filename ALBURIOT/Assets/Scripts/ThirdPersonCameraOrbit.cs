@@ -81,8 +81,12 @@ public class ThirdPersonCameraOrbit : MonoBehaviour
 			}
 			else
 			{
-				// Snap to player
-				yaw = target.eulerAngles.y;
+				// Only snap camera behind player if not moving backwards
+				float verticalInput = Input.GetAxisRaw("Vertical");
+				if (verticalInput >= 0f)
+				{
+					yaw = target.eulerAngles.y;
+				}
 				pitch = defaultPitch;
 			}
 		}

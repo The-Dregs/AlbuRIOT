@@ -3,9 +3,9 @@ using UnityEngine;
 public class EquipmentManager : MonoBehaviour
 {
     public PlayerStats playerStats;
-    public Equipment equippedItem;
+    public ItemData equippedItem;
 
-    public void Equip(Equipment item)
+    public void Equip(ItemData item)
     {
         if (equippedItem != null)
             Unequip();

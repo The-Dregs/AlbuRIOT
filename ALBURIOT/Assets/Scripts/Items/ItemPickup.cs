@@ -1,9 +1,10 @@
 using UnityEngine;
 
-public class EquipmentPickup : MonoBehaviour
+public class ItemPickup : MonoBehaviour
 {
     public ItemData itemData;
-    public GameObject pickupPrompt; // Assign your UI text GameObject here
+    public int quantity = 1;
+    public GameObject pickupPrompt;
 
     private bool playerInRange = false;
     private GameObject player;
@@ -34,13 +35,15 @@ public class EquipmentPickup : MonoBehaviour
     {
         if (playerInRange && Input.GetKeyDown(KeyCode.E))
         {
-            EquipmentManager manager = player.GetComponent<EquipmentManager>();
-            if (manager != null && itemData != null)
+            Inventory inventory = player.GetComponent<Inventory>();
+            if (inventory != null && itemData != null)
             {
-                manager.Equip(itemData);
-                if (pickupPrompt != null)
-                    pickupPrompt.SetActive(false);
-                Destroy(gameObject);
+                if (inventory.AddItem(itemData, quantity))
+                {
+                    if (pickupPrompt != null)
+                        pickupPrompt.SetActive(false);
+                    Destroy(gameObject);
+                }
             }
         }
     }

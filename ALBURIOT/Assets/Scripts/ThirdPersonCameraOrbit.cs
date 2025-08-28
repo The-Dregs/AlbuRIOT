@@ -23,6 +23,11 @@ public class ThirdPersonCameraOrbit : MonoBehaviour
 	private bool isFreeLook = false;
 	public bool cameraControlActive = true; // set by controller
 
+	public void SetCameraControlActive(bool value)
+	{
+		cameraControlActive = value;
+	}
+
 	void Start()
 	{
 		if (cameraTransform == null)
@@ -38,6 +43,7 @@ public class ThirdPersonCameraOrbit : MonoBehaviour
 	void LateUpdate()
 	{
 		if (target == null || cameraTransform == null) return;
+		if (!cameraControlActive) return;
 
 		bool rightMouseHeld = Input.GetMouseButton(1);
 		float mouseX = Input.GetAxis("Mouse X") * mouseSensitivity * Time.deltaTime;

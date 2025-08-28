@@ -21,8 +21,16 @@ public class PlayerCombat : MonoBehaviour
         animator = GetComponent<Animator>();
     }
 
+    private bool canControl = true;
+
+    public void SetCanControl(bool value)
+    {
+        canControl = value;
+    }
+
     void Update()
     {
+        if (!canControl) return;
         // update attack cooldown timer
         if (attackCooldownTimer > 0f)
             attackCooldownTimer -= Time.deltaTime;
@@ -33,7 +41,10 @@ public class PlayerCombat : MonoBehaviour
             var controller = GetComponent<ThirdPersonController>();
             if (controller != null && controller.CanAttack && attackCooldownTimer <= 0f && Input.GetMouseButtonDown(0))
             {
-                if (stats.UseStamina(attackStaminaCost))
+                int finalStaminaCost = attackStaminaCost;
+                if (stats != null)
+                    finalStaminaCost = Mathf.Max(1, attackStaminaCost + stats.staminaCostModifier);
+                if (stats.UseStamina(finalStaminaCost))
                 {
                     Debug.Log("Player attacking!");
                     if (animator != null)

@@ -19,22 +19,47 @@ public class ThirdPersonController : MonoBehaviour
 	private bool isCrouched = false; // placeholder, add crouch logic if needed
 	private bool attackPressed = false;
 
+	private bool canMove = true;
+	private bool canControl = true;
+
+	public void SetCanMove(bool value)
+	{
+		canMove = value;
+	}
+
+	public void SetCanControl(bool value)
+	{
+		canControl = value;
+		canMove = value;
+	}
+
 	void Awake()
 	{
 		controller = GetComponent<CharacterController>();
 		animator = GetComponent<Animator>();
 	}
 
+
+	private PlayerStats playerStats;
+
 	void Start()
 	{
 		Cursor.lockState = CursorLockMode.Locked;
 		Cursor.visible = false;
+		playerStats = GetComponent<PlayerStats>();
 	}
 
 	void Update()
 	{
-		HandleMovement();
+		if (canControl)
+		{
+			if (canMove)
+			{
+				HandleMovement();
+			}
+		}
 		UpdateAnimator();
+	}
 	void UpdateAnimator()
 	{
 		if (animator == null) return;
@@ -58,7 +83,6 @@ public class ThirdPersonController : MonoBehaviour
 
 		// IsCrouched: placeholder, set to false (add crouch logic if needed)
 		animator.SetBool("IsCrouched", isCrouched);
-	}
 	}
 
 	void HandleMovement()
@@ -104,9 +128,13 @@ public class ThirdPersonController : MonoBehaviour
 
 		// running: if Shift and W are pressed, use runSpeed for forward movement
 		float currentSpeed = moveSpeed;
+		if (playerStats != null)
+			currentSpeed += playerStats.speedModifier;
 		if (Input.GetKey(KeyCode.LeftShift) && v > 0.5f)
 		{
 			currentSpeed = runSpeed;
+			if (playerStats != null)
+				currentSpeed += playerStats.speedModifier;
 		}
 		Vector3 horizontal = move * currentSpeed;
 

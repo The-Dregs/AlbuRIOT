@@ -49,10 +49,15 @@ public class ThirdPersonCameraOrbit : MonoBehaviour
 		}
 		else
 		{
+			// Only update yaw if the angle difference is small (prevents sudden flips)
+			float targetYaw = target.eulerAngles.y;
+			float angleDiff = Mathf.DeltaAngle(yaw, targetYaw);
+			if (Mathf.Abs(angleDiff) < 90f) // Only snap if not going backwards
+			{
+				yaw = targetYaw;
+			}
 			// Rotate player (target) with mouse X
 			target.Rotate(Vector3.up, mouseX * 2f); // 2f is a turn speed multiplier, adjust as needed
-			// Keep camera behind player
-			yaw = target.eulerAngles.y;
 		}
 
 		transform.rotation = Quaternion.Euler(pitch, yaw, 0f);

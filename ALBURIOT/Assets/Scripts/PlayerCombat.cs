@@ -24,8 +24,13 @@ public class PlayerCombat : MonoBehaviour
             {
                 if (stats.UseStamina(attackStaminaCost))
                 {
+                    Debug.Log("Player attacking!");
                     Attack();
                     nextAttackTime = Time.time + 1f / attackRate;
+                }
+                else
+                {
+                    Debug.Log("Not enough stamina to attack!");
                 }
             }
         }
@@ -35,11 +40,13 @@ public class PlayerCombat : MonoBehaviour
     {
         // Play attack animation here if you have one
         Collider[] hitEnemies = Physics.OverlapSphere(transform.position + transform.forward * attackRange * 0.5f, attackRange * 0.5f, enemyLayers);
+        Debug.Log($"Attack! Enemies in range: {hitEnemies.Length}");
         foreach (Collider enemy in hitEnemies)
         {
             EnemyStats enemyStats = enemy.GetComponent<EnemyStats>();
             if (enemyStats != null)
             {
+                Debug.Log($"Hit enemy: {enemyStats.gameObject.name}");
                 enemyStats.TakeDamage(attackDamage);
             }
         }

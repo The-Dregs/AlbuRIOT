@@ -13,6 +13,13 @@ MonoBehaviour:
   m_Name: Sword
   m_EditorClassIdentifier: 
   itemName: Sword
-  icon: {fileID: 0}
+  icon: {fileID: 21300000, guid: a7f2b65293e29c34195920631f588170, type: 3}
   description: A normal basic plain sword....
   maxStack: 1
+  healthModifier: 0
+  staminaModifier: 0
+  damageModifier: 10
+  speedModifier: 0
+  staminaCostModifier: 0
+  modelPrefab: {fileID: 355312524381552382, guid: b84d7ca3927758646a65731cc107aa76, type: 3}
+  modelScale: {x: 0.007, y: 0.007, z: 0.007}

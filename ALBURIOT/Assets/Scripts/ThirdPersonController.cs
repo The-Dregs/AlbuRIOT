@@ -3,14 +3,11 @@ using UnityEngine;
 [RequireComponent(typeof(CharacterController))]
 public class ThirdPersonController : MonoBehaviour
 {
-	[Header("Movement Settings")]
 	public float moveSpeed = 6f;
-	public float rotationSpeed = 10f;
+	public float rotationSpeed = 12f;
 	public float jumpHeight = 2f;
 	public float gravity = -15f;
-
-	[Header("References")]
-	public Transform cameraPivot; // assign the CameraRig or Pivot to orient movement
+	public Transform cameraPivot; // assign the CameraRig (the camera orbit root)
 
 	private CharacterController controller;
 	private Vector3 verticalVelocity;
@@ -33,66 +30,62 @@ public class ThirdPersonController : MonoBehaviour
 
 	void HandleMovement()
 	{
-		// Read input
 		float h = Input.GetAxisRaw("Horizontal");
 		float v = Input.GetAxisRaw("Vertical");
 
-		// Movement relative to camera yaw, unless in free look (right mouse held)
-		Vector3 camForward = Vector3.forward;
-		Vector3 camRight = Vector3.right;
-		bool rightMouseHeld = Input.GetMouseButton(1);
-		if (!rightMouseHeld && cameraPivot != null)
-		{
-			Vector3 forward = cameraPivot.forward;
-			forward.y = 0f;
-			forward.Normalize();
-			Vector3 right = cameraPivot.right;
-			right.y = 0f;
-			right.Normalize();
-			camForward = forward;
-			camRight = right;
-		}
-		else
-		{
-			// Use player's own forward/right
-			camForward = transform.forward;
-			camRight = transform.right;
-		}
 
-		Vector3 move = camForward * v + camRight * h;
-		if (move.sqrMagnitude > 1f) move.Normalize();
-
-		// Rotate to face movement direction, but NOT when moving backwards
-		if (move.sqrMagnitude > 0.0001f && v >= 0f)
+		// movement direction depends on freelook state
+		Vector3 move = Vector3.zero;
+		var cameraOrbit = cameraPivot.GetComponent<ThirdPersonCameraOrbit>();
+		if (cameraOrbit != null)
 		{
-			// Only use the forward component for rotation
-			Vector3 forwardMove = camForward * Mathf.Max(0f, v) + camRight * h;
-			if (forwardMove.sqrMagnitude > 0.0001f)
+			if (Input.GetMouseButton(1)) // freelook: move relative to player
 			{
-				Quaternion targetRot = Quaternion.LookRotation(forwardMove, Vector3.up);
-				transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, rotationSpeed * Time.deltaTime);
+				Vector3 playerForward = transform.forward;
+				playerForward.y = 0f;
+				playerForward.Normalize();
+				Vector3 playerRight = transform.right;
+				playerRight.y = 0f;
+				playerRight.Normalize();
+				move = playerForward * v + playerRight * h;
+			}
+			else // normal: move relative to camera
+			{
+				Vector3 camForward = cameraPivot.forward;
+				camForward.y = 0f;
+				camForward.Normalize();
+				Vector3 camRight = cameraPivot.right;
+				camRight.y = 0f;
+				camRight.Normalize();
+				move = camForward * v + camRight * h;
 			}
 		}
+		if (move.sqrMagnitude > 1f) move.Normalize();
 
-		// Horizontal move
+		// rotate player to match camera yaw, unless in free look
+		if (cameraOrbit != null && !Input.GetMouseButton(1)) // not in free look
+		{
+			Quaternion targetRot = Quaternion.Euler(0f, cameraOrbit.transform.eulerAngles.y, 0f);
+			transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, rotationSpeed * Time.deltaTime);
+		}
+
+		// horizontal move
 		Vector3 horizontal = move * moveSpeed;
 
-		// Grounding and jumping
+		// grounding and jumping
 		bool isGrounded = controller.isGrounded;
 		if (isGrounded && verticalVelocity.y < 0f)
 		{
-			verticalVelocity.y = -2f; // small downward force keeps controller grounded
+			verticalVelocity.y = -2f;
 		}
-
 		if (Input.GetKeyDown(KeyCode.Space) && isGrounded)
 		{
 			verticalVelocity.y = Mathf.Sqrt(jumpHeight * -2f * gravity);
 		}
-
-		// Apply gravity
+		// apply gravity
 		verticalVelocity.y += gravity * Time.deltaTime;
 
-		// Move
+		// move
 		Vector3 finalMove = horizontal + verticalVelocity;
 		controller.Move(finalMove * Time.deltaTime);
 
@@ -104,5 +97,7 @@ public class ThirdPersonController : MonoBehaviour
 		}
 	}
 }
+
+
 
 

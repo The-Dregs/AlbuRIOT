@@ -21,19 +21,11 @@ public class PrologueManager : MonoBehaviour
     public GameObject tutorialPanel;
     public TMPro.TextMeshProUGUI tutorialText;
     
-    private PlayerMovement playerMovement;
+    // Movement removed for clean slate
     
     void Start()
     {
-        // Find the player
-        playerMovement = FindObjectOfType<PlayerMovement>();
-        
-        if (playerMovement != null)
-        {
-            // Set tutorial messages
-            playerMovement.tutorialMessages = tutorialMessages;
-            playerMovement.tutorialUI = tutorialPanel;
-        }
+        // Movement hookup removed; tutorial messages can be wired when new movement exists
         
         // Show initial tutorial message
         if (tutorialText != null && tutorialMessages.Length > 0)

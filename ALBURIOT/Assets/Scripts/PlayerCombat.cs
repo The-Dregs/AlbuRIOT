@@ -2,6 +2,10 @@ using UnityEngine;
 
 public class PlayerCombat : MonoBehaviour
 {
+    public float attackCooldown = 1.0f; // seconds
+    private float attackCooldownTimer = 0f;
+    public float AttackCooldownProgress => Mathf.Clamp01(attackCooldownTimer / attackCooldown);
+
     public float attackRange = 2f;
     public float attackRate = 1f;
     public int attackStaminaCost = 20;
@@ -9,23 +13,36 @@ public class PlayerCombat : MonoBehaviour
 
     private float nextAttackTime = 0f;
     private PlayerStats stats;
+    private Animator animator;
 
     void Start()
     {
         stats = GetComponent<PlayerStats>();
+        animator = GetComponent<Animator>();
     }
 
     void Update()
     {
+        // update attack cooldown timer
+        if (attackCooldownTimer > 0f)
+            attackCooldownTimer -= Time.deltaTime;
+
         if (Time.time >= nextAttackTime)
         {
-            if (Input.GetMouseButtonDown(0)) // Left mouse button
+            // Only allow attack if CanAttack is true (i.e., grounded) and cooldown is over
+            var controller = GetComponent<ThirdPersonController>();
+            if (controller != null && controller.CanAttack && attackCooldownTimer <= 0f && Input.GetMouseButtonDown(0))
             {
                 if (stats.UseStamina(attackStaminaCost))
                 {
                     Debug.Log("Player attacking!");
+                    if (animator != null)
+                    {
+                        animator.SetTrigger("Attack");
+                    }
                     Attack();
                     nextAttackTime = Time.time + 1f / attackRate;
+                    attackCooldownTimer = attackCooldown;
                 }
                 else
                 {

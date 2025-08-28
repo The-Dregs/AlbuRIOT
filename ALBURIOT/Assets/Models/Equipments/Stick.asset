@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: b9fa66c6667a96044b1f582f142fb81b, type: 3}
   m_Name: Stick
   m_EditorClassIdentifier: 
-  itemName: 
+  itemName: Stick
   healthModifier: 0
   staminaModifier: 0
-  damageModifier: 0
+  damageModifier: 10

@@ -1,9 +1,12 @@
 using UnityEngine;
 
-[RequireComponent(typeof(CharacterController))]
+[
+RequireComponent(typeof(CharacterController))]
 public class ThirdPersonController : MonoBehaviour
 {
+	public bool CanAttack => controller != null && controller.isGrounded;
 	public float moveSpeed = 6f;
+	public float runSpeed = 11f;
 	public float rotationSpeed = 12f;
 	public float jumpHeight = 2f;
 	public float gravity = -15f;
@@ -11,10 +14,15 @@ public class ThirdPersonController : MonoBehaviour
 
 	private CharacterController controller;
 	private Vector3 verticalVelocity;
+	private Animator animator;
+	private bool isJumping = false;
+	private bool isCrouched = false; // placeholder, add crouch logic if needed
+	private bool attackPressed = false;
 
 	void Awake()
 	{
 		controller = GetComponent<CharacterController>();
+		animator = GetComponent<Animator>();
 	}
 
 	void Start()
@@ -26,6 +34,29 @@ public class ThirdPersonController : MonoBehaviour
 	void Update()
 	{
 		HandleMovement();
+		UpdateAnimator();
+	void UpdateAnimator()
+	{
+		if (animator == null) return;
+
+		// Speed: use horizontal movement magnitude (ignore vertical)
+		float speed = new Vector3(controller.velocity.x, 0f, controller.velocity.z).magnitude;
+		animator.SetFloat("Speed", speed);
+
+		// IsWalking: moving but not running
+		bool isWalking = speed > 0.1f && !Input.GetKey(KeyCode.LeftShift);
+		animator.SetBool("IsWalking", isWalking);
+
+		// IsRunning: running (Shift + W)
+		bool isRunning = Input.GetKey(KeyCode.LeftShift) && Input.GetAxisRaw("Vertical") > 0.5f && speed > 0.1f;
+		animator.SetBool("IsRunning", isRunning);
+
+		// IsJumping: set true when jumping, false when grounded
+		animator.SetBool("IsJumping", isJumping);
+
+		// IsCrouched: placeholder, set to false (add crouch logic if needed)
+		animator.SetBool("IsCrouched", isCrouched);
+	}
 	}
 
 	void HandleMovement()
@@ -69,8 +100,13 @@ public class ThirdPersonController : MonoBehaviour
 			transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, rotationSpeed * Time.deltaTime);
 		}
 
-		// horizontal move
-		Vector3 horizontal = move * moveSpeed;
+		// running: if Shift and W are pressed, use runSpeed for forward movement
+		float currentSpeed = moveSpeed;
+		if (Input.GetKey(KeyCode.LeftShift) && v > 0.5f)
+		{
+			currentSpeed = runSpeed;
+		}
+		Vector3 horizontal = move * currentSpeed;
 
 		// grounding and jumping
 		bool isGrounded = controller.isGrounded;
@@ -81,6 +117,11 @@ public class ThirdPersonController : MonoBehaviour
 		if (Input.GetKeyDown(KeyCode.Space) && isGrounded)
 		{
 			verticalVelocity.y = Mathf.Sqrt(jumpHeight * -2f * gravity);
+			isJumping = true;
+		}
+		if (isGrounded && verticalVelocity.y <= 0f)
+		{
+			isJumping = false;
 		}
 		// apply gravity
 		verticalVelocity.y += gravity * Time.deltaTime;

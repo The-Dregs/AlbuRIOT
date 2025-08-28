@@ -43,12 +43,14 @@ public class ThirdPersonController : MonoBehaviour
 		float speed = new Vector3(controller.velocity.x, 0f, controller.velocity.z).magnitude;
 		animator.SetFloat("Speed", speed);
 
-		// IsWalking: moving but not running
-		bool isWalking = speed > 0.1f && !Input.GetKey(KeyCode.LeftShift);
+	    // IsWalking: moving (forward, backward, or sideways) but not running
+		// Consider walking if moving at any speed and not running (regardless of direction)
+		bool isRunning = Input.GetKey(KeyCode.LeftShift) && Input.GetAxisRaw("Vertical") > 0.5f && speed > 0.1f;
+		bool isWalking = speed > 0.1f && !isRunning;
 		animator.SetBool("IsWalking", isWalking);
 
 		// IsRunning: running (Shift + W)
-		bool isRunning = Input.GetKey(KeyCode.LeftShift) && Input.GetAxisRaw("Vertical") > 0.5f && speed > 0.1f;
+		isRunning = Input.GetKey(KeyCode.LeftShift) && Input.GetAxisRaw("Vertical") > 0.5f && speed > 0.1f;
 		animator.SetBool("IsRunning", isRunning);
 
 		// IsJumping: set true when jumping, false when grounded

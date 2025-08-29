@@ -3,7 +3,7 @@ using UnityEngine.UI;
 
 public class EnemyHealthBar : MonoBehaviour
 {
-	public EnemyStats enemyStats;
+	public EnemyController enemyController;
 	public Slider healthSlider;
 	public Canvas healthCanvas;
 	public float visibleDuration = 2f;
@@ -11,29 +11,27 @@ public class EnemyHealthBar : MonoBehaviour
 
 	void Start()
 	{
-		if (enemyStats == null)
-			enemyStats = GetComponent<EnemyStats>();
+		if (enemyController == null)
+			enemyController = GetComponent<EnemyController>();
 		if (healthSlider == null)
 			healthSlider = GetComponentInChildren<Slider>();
 		if (healthCanvas == null)
 			healthCanvas = GetComponentInChildren<Canvas>();
 
-		if (healthSlider != null && enemyStats != null)
+		if (healthSlider != null && enemyController != null)
 		{
-			healthSlider.maxValue = enemyStats.maxHealth;
-			healthSlider.value = enemyStats.currentHealth;
+			healthSlider.maxValue = enemyController.stats.maxHealth;
+			healthSlider.value = enemyController.GetCurrentHealth();
 		}
 		if (healthCanvas != null)
 			healthCanvas.enabled = false;
-
-	// No event subscription needed; EnemyStats will call ShowHealthBar() directly
 	}
 
 	void Update()
 	{
-		if (healthSlider != null && enemyStats != null)
+		if (healthSlider != null && enemyController != null)
 		{
-			healthSlider.value = enemyStats.currentHealth;
+			healthSlider.value = enemyController.GetCurrentHealth();
 		}
 		if (healthCanvas != null && healthCanvas.enabled)
 		{

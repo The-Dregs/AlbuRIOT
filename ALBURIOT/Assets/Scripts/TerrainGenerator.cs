@@ -6,7 +6,7 @@ public class TerrainGenerator : MonoBehaviour
     public int width = 512;
     public int height = 512;
     public float scale = 40f;
-    public float heightMultiplier = 18f; // Increased for more vertical variation
+    public float heightMultiplier = 8f; // Lowered for a flatter island
     public int seed = 0;
     public Material terrainMaterial;
     public GameObject treePrefab;
@@ -14,7 +14,7 @@ public class TerrainGenerator : MonoBehaviour
     public int treeCount = 100;
     public int rockCount = 50;
     public GameObject waterPrefab;
-    public float waterHeight = 0.15f;
+    public float waterHeight = 0.08f; // Lowered water height
     public float biomeScale = 0.12f; // Controls biome size/frequency
     [Range(0f, 1f)] public float plainsThreshold = 0.33f;
     [Range(0f, 1f)] public float hillsThreshold = 0.66f;
@@ -38,7 +38,8 @@ public class TerrainGenerator : MonoBehaviour
 
         float[,] heights = new float[width, height];
         Vector2 center = new Vector2(width / 2f, height / 2f);
-        float maxDist = width / 2f * 0.98f;
+    // Make the island smaller by reducing the maxDist (radius)
+    float maxDist = width / 2f * 0.55f;
         for (int x = 0; x < width; x++)
         {
             for (int z = 0; z < height; z++)
@@ -67,10 +68,10 @@ public class TerrainGenerator : MonoBehaviour
                     finalHeight = Mathf.Lerp(baseHeight, Mathf.Pow(baseHeight, 2.5f), 0.8f);
                 }
 
-                // Gentle island mask (radial falloff)
+                // Sharper island mask (radial falloff) for a more defined edge and smaller island
                 float dist = Vector2.Distance(new Vector2(x, z), center);
                 float normDist = dist / maxDist;
-                float islandFalloff = Mathf.SmoothStep(1f, 0.1f, normDist);
+                float islandFalloff = Mathf.Clamp01(1f - Mathf.Pow(normDist, 2.5f));
                 finalHeight *= islandFalloff;
 
                 heights[x, z] = Mathf.Clamp01(finalHeight);
@@ -129,9 +130,20 @@ public class TerrainGenerator : MonoBehaviour
 
     Vector3 GetRandomPositionOnTerrain()
     {
-        float x = (float)prng.NextDouble() * width;
-        float z = (float)prng.NextDouble() * height;
-        float y = terrain.SampleHeight(new Vector3(x, 0, z));
-        return new Vector3(x, y, z);
+        // Try up to 20 times to find a position above water
+        for (int attempt = 0; attempt < 20; attempt++)
+        {
+            float x = (float)prng.NextDouble() * width;
+            float z = (float)prng.NextDouble() * height;
+            float y = terrain.SampleHeight(new Vector3(x, 0, z));
+            float normalizedHeight = y / heightMultiplier;
+            if (normalizedHeight > waterHeight + 0.01f) // Only allow above water
+                return new Vector3(x, y, z);
+        }
+        // Fallback: just return a random position (may be in water if all else fails)
+        float fx = (float)prng.NextDouble() * width;
+        float fz = (float)prng.NextDouble() * height;
+        float fy = terrain.SampleHeight(new Vector3(fx, 0, fz));
+        return new Vector3(fx, fy, fz);
     }
 }

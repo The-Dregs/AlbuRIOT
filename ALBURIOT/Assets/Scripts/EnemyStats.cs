@@ -1,32 +1,16 @@
 using UnityEngine;
+using TMPro;
 
-public class EnemyStats : MonoBehaviour
+[CreateAssetMenu(fileName = "NewEnemyStats", menuName = "Enemy/Stats")]
+public class EnemyStats : ScriptableObject
 {
-    public int maxHealth = 50;
-    public int currentHealth;
-
-    void Awake()
-    {
-        currentHealth = maxHealth;
-    }
-
-    public void TakeDamage(int amount)
-    {
-        currentHealth -= amount;
-        // Show health bar if EnemyHealthBar exists
-        EnemyHealthBar healthBar = GetComponent<EnemyHealthBar>();
-        if (healthBar != null)
-        {
-            healthBar.ShowHealthBar();
-        }
-        if (currentHealth <= 0)
-        {
-            Die();
-        }
-    }
-
-    void Die()
-    {
-        Destroy(gameObject);
-    }
+    public string enemyName;
+    public int maxHealth = 100;
+    public int damage = 10;
+    public float moveSpeed = 3f;
+    public float detectionRange = 10f;
+    public float attackRange = 2f;
+    public float attackCooldown = 1.5f;
+    public bool isMelee = true; // Checkbox in Inspector
+    // Add more stats as needed
 }

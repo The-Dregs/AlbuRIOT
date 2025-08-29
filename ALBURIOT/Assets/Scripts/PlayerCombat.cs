@@ -70,11 +70,11 @@ public class PlayerCombat : MonoBehaviour
         Debug.Log($"Attack! Enemies in range: {hitEnemies.Length}");
         foreach (Collider enemy in hitEnemies)
         {
-            EnemyStats enemyStats = enemy.GetComponent<EnemyStats>();
-            if (enemyStats != null)
+            EnemyController enemyController = enemy.GetComponent<EnemyController>();
+            if (enemyController != null)
             {
-                Debug.Log($"Hit enemy: {enemyStats.gameObject.name}");
-                enemyStats.TakeDamage(stats.baseDamage);
+                Debug.Log($"Hit enemy: {enemyController.gameObject.name}");
+                enemyController.TakeDamage(stats.baseDamage);
             }
         }
     }

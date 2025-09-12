@@ -29,23 +29,13 @@ public class InventoryUI : MonoBehaviour
             if (open)
             {
                 RefreshUI();
-                if (playerController != null)
-                    playerController.SetCanControl(false);
-                if (playerCombat != null)
-                    playerCombat.SetCanControl(false);
-                if (cameraOrbit != null)
-                    cameraOrbit.SetCameraControlActive(false);
+                Time.timeScale = 0f; // Pause the game
                 Cursor.lockState = CursorLockMode.None;
                 Cursor.visible = true;
             }
             else
             {
-                if (playerController != null)
-                    playerController.SetCanControl(true);
-                if (playerCombat != null)
-                    playerCombat.SetCanControl(true);
-                if (cameraOrbit != null)
-                    cameraOrbit.SetCameraControlActive(true);
+                Time.timeScale = 1f; // Resume the game
                 Cursor.lockState = CursorLockMode.Locked;
                 Cursor.visible = false;
             }

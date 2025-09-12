@@ -153,38 +153,11 @@ MonoBehaviour:
   continueButton: {fileID: 1499767035}
   skipButton: {fileID: 1709168129}
   dialogueLines:
-  - Long before written history and colonial conquest reached the shores of the Philippines,
-    the islands thrived under the quiet balance of spirits and nature.
-  - Towering mountains, dense forests, and deep oceans were home to powerful beings
-    that kept the world in harmony.
-  - 'Among the most feared and revered were two celestial titans: Minokawa, the colossal
-    bird whose wings could eclipse the sun, and Bakunawa, the mighty sea serpent
-    believed to devour the moon.'
-  - These beings, though chaotic by nature, maintained a rhythm that kept both the
-    physical and spiritual realms in balance.
-  - "That peace was shattered when foreign forces arrived\u2014explorers, conquerors,
-    and mercenaries lured by tales of god-like creatures that controlled the heavens."
-  - Their greed drove them to hunt Minokawa and Bakunawa, hoping to steal divine
-    power from the stars and the sea.
-  - Though their campaigns failed, the damage was irreversible. Enraged, the two
-    titans turned their wrath upon the islands.
-  - Their cosmic battle fractured the fabric of the spirit world, unleashing an age
-    of chaos.
-  - Now, mythological creatures once kept in check by divine balance have become
-    destroyers.
-  - "In the midst of this spiritual collapse, a new force rises. You are an Albularyo\u2014a
-    healer, spirit-binder, and guardian of ancestral knowledge."
-  - Called upon by the elders of Luzon, Visayas, and Mindanao, you are tasked with
-    restoring the balance between the mortal and spirit worlds.
-  - Your mission is not to destroy these creatures, but to understand them and reclaim
-    what was lost.
-  - The last hope lies in finding Manaul, the forgotten divine bird of peace, once
-    capable of ending wars with a single call.
-  - To awaken Manaul, you must journey across the fractured islands, face corrupted
-    spirits, and uncover the true origin of the conflict.
-  - The spirits will not surrender easily. The world remembers the sins of the invaders,
-    and the darkness they left behind still lingers.
-  - Your journey as an Albularyo begins now...
+  - Long ago, people in the Philippines lived in harmony.
+  - Rich in resources, it provided tools for survival for the Filipinos.
+  - But it all changed when colonizers attacked.
+  - They plundered resources, people, and replaced our culture with their own.
+  - "Until, they disturbed something they shouldn\u2019t have"
   textSpeed: 0.05
   prologueScene: Prologue
   sceneTransitionDelay: 1

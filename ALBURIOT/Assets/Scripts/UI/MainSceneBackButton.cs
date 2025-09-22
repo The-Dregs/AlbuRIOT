@@ -7,6 +7,6 @@ public class MainSceneBackButton : MonoBehaviour
 
     public void GoBackToPrologue()
     {
-        SceneManager.LoadScene(prologueSceneName);
+    Photon.Pun.PhotonNetwork.LoadLevel(prologueSceneName);
     }
 }

@@ -6,16 +6,11 @@ public class MainScenePlayerSpawner : MonoBehaviour
 
     void Start()
     {
-        if (PlayerSpawnManager.nextSpawnPosition.HasValue)
+        if (Photon.Pun.PhotonNetwork.IsConnected && Photon.Pun.PhotonNetwork.InRoom)
         {
-            Vector3 spawnPos = PlayerSpawnManager.nextSpawnPosition.Value;
-            Instantiate(playerPrefab, spawnPos, Quaternion.identity);
+            Vector3 spawnPos = PlayerSpawnManager.nextSpawnPosition.HasValue ? PlayerSpawnManager.nextSpawnPosition.Value : Vector3.zero;
+            Photon.Pun.PhotonNetwork.Instantiate(playerPrefab.name, spawnPos, Quaternion.identity);
             PlayerSpawnManager.nextSpawnPosition = null;
-        }
-        else
-        {
-            // Spawn at default position if no spawn position is set
-            Instantiate(playerPrefab, Vector3.zero, Quaternion.identity);
         }
     }
 }

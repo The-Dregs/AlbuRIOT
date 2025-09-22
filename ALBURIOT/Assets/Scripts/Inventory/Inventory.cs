@@ -1,3 +1,4 @@
+using Photon.Pun;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -14,13 +15,20 @@ public class InventorySlot
     }
 }
 
-public class Inventory : MonoBehaviour
+public class Inventory : MonoBehaviourPun
 {
+    private PhotonView photonView;
+
     public int maxSlots = 20;
     public List<InventorySlot> slots = new List<InventorySlot>();
 
+    void Awake()
+    {
+        photonView = GetComponent<PhotonView>();
+    }
     public bool AddItem(ItemData item, int quantity = 1)
     {
+    if (photonView != null && !photonView.IsMine) return false;
         // Check if item already exists and can stack
         foreach (var slot in slots)
         {
@@ -44,6 +52,7 @@ public class Inventory : MonoBehaviour
 
     public bool RemoveItem(ItemData item, int quantity = 1)
     {
+    if (photonView != null && !photonView.IsMine) return false;
         for (int i = slots.Count - 1; i >= 0; i--)
         {
             var slot = slots[i];
@@ -67,6 +76,7 @@ public class Inventory : MonoBehaviour
 
     public bool HasItem(ItemData item, int quantity = 1)
     {
+        if (photonView != null && !photonView.IsMine) return false;
         int count = 0;
         foreach (var slot in slots)
         {

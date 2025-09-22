@@ -1,4 +1,3 @@
-
 using UnityEngine;
 using Photon.Pun;
 using Photon.Realtime;
@@ -8,8 +7,7 @@ using System.Collections;
 
 public class LobbyManager : MonoBehaviourPunCallbacks
 {
-    public GameObject lobbyPanel; // Assign your lobby panel here
-    // Panel references for navigation
+    public GameObject lobbyPanel;
     public GameObject mainMenuPanel;
     public GameObject joinOrCreatePanel;
     public GameObject loadingPanel;
@@ -17,25 +15,26 @@ public class LobbyManager : MonoBehaviourPunCallbacks
     public Button startGameButton;
     public TextMeshProUGUI loadingStatusText;
     public Button continueButton;
-    public Button readyButton;
+    public Button readyButton; // restored readyButton
     public Button createGameButton;
     public Button joinGameButton;
     public TextMeshProUGUI statusText;
-    public TextMeshProUGUI[] playerSlots; // Assign 4 TMP text elements for player names
-    public TextMeshProUGUI roomCodeText; // Display room code
-    public TMP_InputField joinCodeInput; // Assign for join game panel
-    public TMP_InputField nameInput; // Assign for player name input
+    public TextMeshProUGUI[] playerSlots;
+    public TextMeshProUGUI roomCodeText;
+    public TMP_InputField joinCodeInput;
+    public TMP_InputField nameInput;
 
     public string startDialogueScene = "startDIALOGUE";
     private string pendingJoinCode = null;
     private string createdRoomCode = "";
+    private bool isReady = false; // restored ready state
 
-        // --- Multiplayer Dialogue Start ---
     [PunRPC]
     public void StartDialogueForAll()
     {
-        UnityEngine.SceneManagement.SceneManager.LoadScene(startDialogueScene);
+    Photon.Pun.PhotonNetwork.LoadLevel(startDialogueScene);
     }
+
     void ShowLoading(string message)
     {
         if (!isLoadingTriggeredByUser) return;
@@ -47,10 +46,11 @@ public class LobbyManager : MonoBehaviourPunCallbacks
     {
         if (loadingPanel != null) loadingPanel.SetActive(false);
     }
+
     void Start()
     {
         isLoadingTriggeredByUser = false;
-        HideLoading(); // Hide loading panel on startup
+        HideLoading();
         ShowMainMenu();
         statusText.text = "Connecting to Photon...";
         PhotonNetwork.ConnectUsingSettings();
@@ -58,15 +58,19 @@ public class LobbyManager : MonoBehaviourPunCallbacks
         ClearPlayerSlots();
         if (roomCodeText != null) roomCodeText.text = "";
 
+        // Set name input max length to 10
+        if (nameInput != null)
+            nameInput.characterLimit = 10;
+
         // Add validation for name input
         if (nameInput != null && createGameButton != null && joinGameButton != null)
         {
             nameInput.onValueChanged.AddListener(OnNameInputChanged);
             OnNameInputChanged(nameInput.text);
         }
-        HideLoading(); // Hide after initial setup
+        HideLoading();
     }
-    // --- Panel Navigation Methods (from MenuManager) ---
+
     public void ShowMainMenu()
     {
         if (mainMenuPanel != null) mainMenuPanel.SetActive(true);
@@ -134,7 +138,13 @@ public class LobbyManager : MonoBehaviourPunCallbacks
     {
         if (PhotonNetwork.IsMasterClient)
         {
+            Debug.Log("Host is starting the game. Loading startDIALOGUE for all players.");
             PhotonView photonView = PhotonView.Get(this);
+            if (photonView == null)
+            {
+                Debug.LogError("PhotonView component missing on LobbyManager GameObject. Please add a PhotonView.");
+                return;
+            }
             photonView.RPC("StartDialogueForAll", RpcTarget.All);
         }
     }
@@ -187,9 +197,8 @@ public class LobbyManager : MonoBehaviourPunCallbacks
 
     public override void OnConnectedToMaster()
     {
-        ShowLoading("Connected! Joining Lobby...");
-        statusText.text = "Connected! Joining Lobby...";
-        PhotonNetwork.JoinLobby();
+        ShowLoading("Connected to server!");
+        statusText.text = "Connected to server!";
         UpdatePlayerList();
     }
 
@@ -221,6 +230,12 @@ public class LobbyManager : MonoBehaviourPunCallbacks
         string roomName = GenerateLobbyCode();
         createdRoomCode = roomName;
         PhotonNetwork.JoinOrCreateRoom(roomName, new RoomOptions { MaxPlayers = 4 }, TypedLobby.Default);
+        // When host starts game, trigger dialogue for all
+        if (PhotonNetwork.IsMasterClient)
+        {
+            PhotonView photonView = PhotonView.Get(this);
+            photonView.RPC("StartDialogueForAll", RpcTarget.All);
+        }
     }
 
     string GenerateLobbyCode()
@@ -237,12 +252,20 @@ public class LobbyManager : MonoBehaviourPunCallbacks
 
     public override void OnJoinedRoom()
     {
+        // If room is full, leave and show error
+        if (PhotonNetwork.CurrentRoom.PlayerCount > 4)
+        {
+            ShowLoading("Lobby is full. Returning to join panel...");
+            PhotonNetwork.LeaveRoom();
+            StartCoroutine(ShowJoinOrCreatePanelWithDelay());
+            return;
+        }
         StartCoroutine(ShowLobbyWithDelay());
     }
 
     private IEnumerator ShowLobbyWithDelay()
     {
-        yield return new WaitForSeconds(0.7f); // 0.7 second delay
+        yield return new WaitForSeconds(0.7f);
         isLoadingTriggeredByUser = false;
         HideLoading();
         statusText.text = "Joined Room! Waiting for players...";
@@ -258,24 +281,62 @@ public class LobbyManager : MonoBehaviourPunCallbacks
     }
 
     void UpdateLobbyUI()
+{
+    bool isHost = PhotonNetwork.IsMasterClient;
+    if (startGameButton != null) startGameButton.gameObject.SetActive(isHost);
+    if (continueButton != null) continueButton.gameObject.SetActive(isHost);
+    if (readyButton != null) readyButton.gameObject.SetActive(!isHost);
+
+    // update ready button text for local player
+    if (readyButton != null)
     {
-        bool isHost = PhotonNetwork.IsMasterClient;
-        if (startGameButton != null) startGameButton.gameObject.SetActive(isHost);
-        if (continueButton != null) continueButton.gameObject.SetActive(isHost);
-        if (readyButton != null) readyButton.gameObject.SetActive(!isHost);
-        if (isHost)
+        var btnText = readyButton.GetComponentInChildren<TextMeshProUGUI>();
+        if (btnText != null)
         {
-            startGameButton.interactable = AllPlayersReady();
+            bool localReady = PhotonNetwork.LocalPlayer.CustomProperties.ContainsKey("Ready") && (bool)PhotonNetwork.LocalPlayer.CustomProperties["Ready"];
+            btnText.text = localReady ? "Unready" : "Ready";
         }
     }
 
+        if (isHost)
+        {
+            // Enable start if all joiners are ready, or if host is alone
+            int joinerCount = PhotonNetwork.PlayerListOthers.Length;
+            bool allJoinersReady = true;
+            foreach (var player in PhotonNetwork.PlayerListOthers)
+            {
+                if (player.CustomProperties == null || !player.CustomProperties.ContainsKey("Ready") || !(bool)player.CustomProperties["Ready"])
+                {
+                    allJoinersReady = false;
+                    break;
+                }
+            }
+            startGameButton.interactable = (joinerCount == 0) || allJoinersReady;
+        }
+}
+
     public void OnReadyClicked()
+{
+    if (isReady) Debug.LogWarning("Ready logic called twice! Check inspector assignments.");
+    isReady = !isReady;
+    ExitGames.Client.Photon.Hashtable props = new ExitGames.Client.Photon.Hashtable();
+    props["Ready"] = isReady;
+    PhotonNetwork.LocalPlayer.SetCustomProperties(props);
+    PhotonView photonView = PhotonView.Get(this);
+    photonView.RPC("RPC_RefreshPlayerList", RpcTarget.All);
+    photonView.RPC("RPC_DebugReadyState", RpcTarget.MasterClient, PhotonNetwork.LocalPlayer.NickName, isReady);
+}
+
+    [PunRPC]
+    public void RPC_DebugReadyState(string playerName, bool ready)
     {
-        ExitGames.Client.Photon.Hashtable props = new ExitGames.Client.Photon.Hashtable();
-        props["Ready"] = true;
-        PhotonNetwork.LocalPlayer.SetCustomProperties(props);
-        readyButton.interactable = false;
-        statusText.text = "Ready! Waiting for host...";
+        Debug.Log($"[Lobby] Player '{playerName}' is now {(ready ? "READY" : "UNREADY")}");
+    }
+
+    [PunRPC]
+    public void RPC_RefreshPlayerList()
+    {
+        UpdatePlayerList();
         UpdateLobbyUI();
     }
 
@@ -295,9 +356,10 @@ public class LobbyManager : MonoBehaviourPunCallbacks
         ShowLoading("Room code not found or join failed.");
         StartCoroutine(ShowJoinOrCreatePanelWithDelay());
     }
+
     private IEnumerator ShowJoinOrCreatePanelWithDelay()
     {
-        yield return new WaitForSeconds(1f); // Show error for 1.2 seconds
+        yield return new WaitForSeconds(1f);
         HideLoading();
         ShowJoinOrCreatePanel();
         statusText.text = "Please enter a valid lobby code.";
@@ -316,23 +378,26 @@ public class LobbyManager : MonoBehaviourPunCallbacks
     }
 
     void UpdatePlayerList()
+{
+    ClearPlayerSlots();
+    var players = PhotonNetwork.PlayerList;
+    for (int i = 0; i < playerSlots.Length; i++)
     {
-        ClearPlayerSlots();
-        var players = PhotonNetwork.PlayerList;
-        for (int i = 0; i < playerSlots.Length; i++)
+        if (i < players.Length)
         {
-            if (i < players.Length)
-            {
-                string name = !string.IsNullOrEmpty(players[i].NickName) ? players[i].NickName : ($"Player {i + 1}");
-                bool ready = players[i].CustomProperties != null && players[i].CustomProperties.ContainsKey("Ready") && (bool)players[i].CustomProperties["Ready"];
-                playerSlots[i].text = name + (ready ? " (Ready)" : "");
-            }
-            else
-            {
-                playerSlots[i].text = "Waiting...";
-            }
+            string name = !string.IsNullOrEmpty(players[i].NickName) ? players[i].NickName : ($"Player {i + 1}");
+            bool ready = players[i].CustomProperties != null && players[i].CustomProperties.ContainsKey("Ready") && (bool)players[i].CustomProperties["Ready"];
+            bool isHost = players[i].ActorNumber == PhotonNetwork.MasterClient.ActorNumber;
+            string hostTag = isHost ? " (Host)" : "";
+            string readyTag = ready ? " (Ready)" : "";
+            playerSlots[i].text = name + hostTag + readyTag;
+        }
+        else
+        {
+            playerSlots[i].text = "Waiting...";
         }
     }
+}
 
     void ClearPlayerSlots()
     {
@@ -358,7 +423,6 @@ public class LobbyManager : MonoBehaviourPunCallbacks
         if (lobbyPanel != null) lobbyPanel.SetActive(false);
         if (loadingPanel != null) loadingPanel.SetActive(false);
         if (PhotonNetwork.InRoom) PhotonNetwork.LeaveRoom();
-        // Do NOT disconnect from Photon here, so you can create/join new lobbies
         if (roomCodeText != null) roomCodeText.text = "";
         ClearPlayerSlots();
         createdRoomCode = "";

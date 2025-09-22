@@ -51,12 +51,12 @@ public class PrologueManager : MonoBehaviour
     
     void LoadMainGame()
     {
-        SceneManager.LoadScene(mainGameScene);
+    Photon.Pun.PhotonNetwork.LoadLevel(mainGameScene);
     }
     
     // Public method to skip prologue
     public void SkipPrologue()
     {
-        LoadMainGame();
+    LoadMainGame(); // Already uses PhotonNetwork.LoadLevel
     }
 }

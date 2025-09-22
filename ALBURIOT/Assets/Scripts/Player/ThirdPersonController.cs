@@ -1,8 +1,9 @@
+using Photon.Pun;
 using UnityEngine;
 
 [
 RequireComponent(typeof(CharacterController))]
-public class ThirdPersonController : MonoBehaviour
+public class ThirdPersonController : MonoBehaviourPun
 {
 	public bool CanAttack => controller != null && controller.isGrounded;
 	public float moveSpeed = 6f;
@@ -44,22 +45,37 @@ public class ThirdPersonController : MonoBehaviour
 
 	void Start()
 	{
-		Cursor.lockState = CursorLockMode.Locked;
-		Cursor.visible = false;
 		playerStats = GetComponent<PlayerStats>();
+
+		// Only enable camera/audio for local player
+		if (photonView != null && !photonView.IsMine)
+		{
+			Camera myCam = GetComponentInChildren<Camera>();
+			AudioListener myListener = GetComponentInChildren<AudioListener>();
+			if (myCam != null) myCam.enabled = false;
+			if (myListener != null) myListener.enabled = false;
+		}
+		else
+		{
+			Cursor.lockState = CursorLockMode.Locked;
+			Cursor.visible = false;
+		}
 	}
 
 	void Update()
+{
+	if (Photon.Pun.PhotonNetwork.InRoom && photonView != null && !photonView.IsMine)
+		return; // Only allow local player to control
+
+	if (canControl)
 	{
-		if (canControl)
+		if (canMove)
 		{
-			if (canMove)
-			{
-				HandleMovement();
-			}
+			HandleMovement();
 		}
-		UpdateAnimator();
 	}
+	UpdateAnimator();
+}
 	void UpdateAnimator()
 	{
 		if (animator == null) return;

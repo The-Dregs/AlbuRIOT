@@ -16,10 +16,12 @@ public class ProloguePauseMenu : MonoBehaviour
     {
         if (Input.GetKeyDown(KeyCode.Escape))
         {
-            if (isPaused)
-                Resume();
-            else
-                Pause();
+            if (pauseMenuUI != null)
+            {
+                bool open = !pauseMenuUI.activeSelf;
+                pauseMenuUI.SetActive(open);
+                isPaused = open;
+            }
         }
     }
 
@@ -39,8 +41,8 @@ public class ProloguePauseMenu : MonoBehaviour
 
     public void LoadMainMenu()
     {
-        Time.timeScale = 1f;
-        SceneManager.LoadScene(mainMenuSceneName);
+    Time.timeScale = 1f;
+    Photon.Pun.PhotonNetwork.LoadLevel(mainMenuSceneName);
     }
 
     public void TeleportToMainScene()
@@ -48,7 +50,7 @@ public class ProloguePauseMenu : MonoBehaviour
     // Store the desired spawn position for the MAIN scene
     PlayerSpawnManager.nextSpawnPosition = mainSceneSpawnPosition;
     Time.timeScale = 1f;
-    UnityEngine.SceneManagement.SceneManager.LoadScene(mainSceneName);
+    Photon.Pun.PhotonNetwork.LoadLevel(mainSceneName);
     }
 
     public void QuitGame()

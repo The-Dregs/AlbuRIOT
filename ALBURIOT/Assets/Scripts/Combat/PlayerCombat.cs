@@ -30,6 +30,8 @@ public class PlayerCombat : MonoBehaviour
 
     void Update()
     {
+        var photonView = GetComponent<Photon.Pun.PhotonView>();
+        if (photonView != null && !photonView.IsMine) return;
         if (!canControl) return;
         // update attack cooldown timer
         if (attackCooldownTimer > 0f)

@@ -1,7 +1,8 @@
 using UnityEngine;
 using UnityEngine.UI;
+using Photon.Pun;
 
-public class PlayerStatsUI : MonoBehaviour
+public class PlayerStatsUI : MonoBehaviourPun
 {
     public PlayerStats playerStats;
     public Slider healthSlider;
@@ -9,6 +10,7 @@ public class PlayerStatsUI : MonoBehaviour
 
     void Update()
     {
+        if (photonView != null && !photonView.IsMine) return;
         if (playerStats != null)
         {
             healthSlider.value = (float)playerStats.currentHealth / playerStats.maxHealth;

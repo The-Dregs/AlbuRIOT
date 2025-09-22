@@ -12,8 +12,8 @@ EditorBuildSettings:
     path: Assets/Scenes/startDIALOGUE.unity
     guid: 99dfc16ae2f4ce649b763de24a6bb47d
   - enabled: 1
-    path: Assets/Scenes/PROLOGUE.unity
-    guid: d5e80aa7397856e4e91b2848239a359d
+    path: Assets/Scenes/TUTORIAL.unity
+    guid: 1d4f6df1c5579b54b91eb6419bc9307e
   - enabled: 1
     path: Assets/Scenes/MAIN.unity
     guid: 99c9720ab356a0642a771bea13969a05

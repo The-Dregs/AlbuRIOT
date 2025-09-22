@@ -22,6 +22,8 @@ public class InventoryUI : MonoBehaviour
 
     private void Update()
     {
+        var photonView = playerInventory != null ? playerInventory.GetComponent<Photon.Pun.PhotonView>() : null;
+        if (photonView != null && !photonView.IsMine) return;
         if (Input.GetKeyDown(KeyCode.F))
         {
             bool open = !inventoryPanel.activeSelf;
@@ -29,13 +31,11 @@ public class InventoryUI : MonoBehaviour
             if (open)
             {
                 RefreshUI();
-                Time.timeScale = 0f; // Pause the game
                 Cursor.lockState = CursorLockMode.None;
                 Cursor.visible = true;
             }
             else
             {
-                Time.timeScale = 1f; // Resume the game
                 Cursor.lockState = CursorLockMode.Locked;
                 Cursor.visible = false;
             }

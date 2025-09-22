@@ -1,6 +1,7 @@
 using UnityEngine;
+using Photon.Pun;
 
-public class PlayerStats : MonoBehaviour
+public class PlayerStats : MonoBehaviourPun
 {
     public int maxHealth = 100;
     public int currentHealth;
@@ -20,6 +21,7 @@ public class PlayerStats : MonoBehaviour
 
     void Update()
     {
+        if (photonView != null && !photonView.IsMine) return;
         if (currentStamina < maxStamina)
         {
             currentStamina += Mathf.RoundToInt(staminaRegenRate * Time.deltaTime);

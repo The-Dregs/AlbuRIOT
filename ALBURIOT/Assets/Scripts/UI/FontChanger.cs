@@ -21,19 +21,16 @@ public class FontChanger : MonoBehaviour
     
     void Start()
     {
-        Debug.Log("FontChanger: Start() called on " + gameObject.name);
-        
+                
         // If no target text is assigned, try to get it from this GameObject
         if (targetText == null)
         {
             targetText = GetComponent<TextMeshProUGUI>();
-            Debug.Log("FontChanger: Found TMP Text component: " + (targetText != null));
         }
         
         // Generate default red colors if not using custom colors
         if (!useCustomColors || colors.Length == 0)
         {
-            Debug.Log("FontChanger: Generating default red colors");
             GenerateRedColors();
         }
         else
@@ -41,19 +38,14 @@ public class FontChanger : MonoBehaviour
             Debug.Log("FontChanger: Using custom colors, count: " + colors.Length);
         }
         
-        Debug.Log("FontChanger: Number of fonts: " + fonts.Length);
-        Debug.Log("FontChanger: Number of colors: " + colors.Length);
         
         // Start the font changing coroutine
         if (targetText != null && fonts.Length > 0)
         {
-            Debug.Log("FontChanger: Starting font change routine");
             fontChangeCoroutine = StartCoroutine(ChangeFontRoutine());
         }
         else
         {
-            Debug.LogWarning("FontChanger: No target text or fonts assigned!");
-            Debug.LogWarning("Target Text: " + (targetText != null) + ", Fonts Length: " + fonts.Length);
         }
     }
     
@@ -69,13 +61,10 @@ public class FontChanger : MonoBehaviour
             new Color(0.5f, 0.0f, 0.0f, 1f), // Deep red
             new Color(0.75f, 0.15f, 0.15f, 1f) // Medium dark red
         };
-        Debug.Log("FontChanger: Generated " + colors.Length + " default colors");
     }
     
     IEnumerator ChangeFontRoutine()
     {
-        Debug.Log("FontChanger: Font change routine started");
-        
         while (true)
         {
             // Change to next font
@@ -87,9 +76,6 @@ public class FontChanger : MonoBehaviour
             {
                 currentColorIndex = (currentColorIndex + 1) % colors.Length;
                 targetText.color = colors[currentColorIndex];
-                Debug.Log("FontChanger: Changed to font " + currentFontIndex + ": " + fonts[currentFontIndex].name + 
-                         " and color " + currentColorIndex + ": " + colors[currentColorIndex] + 
-                         " (R:" + colors[currentColorIndex].r + " G:" + colors[currentColorIndex].g + " B:" + colors[currentColorIndex].b + ")");
             }
             else
             {

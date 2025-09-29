@@ -14,12 +14,21 @@ public class DialogueManager : MonoBehaviourPunCallbacks
         if (dialoguePanel != null)
             dialoguePanel.SetActive(true);
 
+        // Show host control text for joiners only while dialogue is active
+        if (!PhotonNetwork.IsMasterClient && hostControlText != null)
+        {
+            hostControlText.gameObject.SetActive(true);
+            hostControlText.text = "Host is controlling the dialogue.";
+        }
+
         if (dialogueLines.Length > 0)
         {
             currentLine = 0;
             DisplayNextLine();
         }
     }
+    public Image backgroundImage; // Assign your "Background Image" in inspector
+    public Sprite[] backgroundSprites; // Assign your 5 sprites in inspector
     [Header("Dialogue UI")]
     public TextMeshProUGUI dialogueText;
     public TextMeshProUGUI hostControlText; // assign in inspector
@@ -46,6 +55,10 @@ public class DialogueManager : MonoBehaviourPunCallbacks
         if (dialoguePanel != null)
             dialoguePanel.SetActive(false);
 
+        // Hide host control text initially
+        if (hostControlText != null)
+            hostControlText.gameObject.SetActive(false);
+
         // Set up button listeners for host only
         if (PhotonNetwork.IsMasterClient)
         {
@@ -53,24 +66,18 @@ public class DialogueManager : MonoBehaviourPunCallbacks
                 continueButton.onClick.AddListener(OnHostContinueClicked);
             if (skipButton != null)
                 skipButton.onClick.AddListener(OnHostSkipClicked);
-            if (hostControlText != null)
-                hostControlText.gameObject.SetActive(false);
         }
         else
         {
+            // Hide buttons for joiners
             if (continueButton != null)
-                continueButton.interactable = false;
+                continueButton.gameObject.SetActive(false);
             if (skipButton != null)
-                skipButton.interactable = false;
-            if (hostControlText != null)
-            {
-                hostControlText.gameObject.SetActive(true);
-                hostControlText.text = "Host is controlling the dialogue.";
-            }
+                skipButton.gameObject.SetActive(false);
         }
 
         // Start dialogue after a short delay
-        Invoke("StartDialogue", 1f);
+        Invoke("StartDialogue", 1.5f);
     }
 
     public void StartDialogue(DialogueData dialogue)
@@ -91,13 +98,24 @@ public class DialogueManager : MonoBehaviourPunCallbacks
             if (typingCoroutine != null)
                 StopCoroutine(typingCoroutine);
 
-            typingCoroutine = StartCoroutine(TypeText(dialogueLines[currentLine]));
+            // Change background image sprite for this line
+            if (backgroundImage != null && backgroundSprites != null && currentLine < backgroundSprites.Length)
+                backgroundImage.sprite = backgroundSprites[currentLine];
+
+            // Add delay before showing the line
+            StartCoroutine(ShowLineWithDelay(dialogueLines[currentLine], 1f));
         }
         else
         {
-            // Dialogue finished, transition to main game
             EndDialogue();
         }
+    }
+
+    IEnumerator ShowLineWithDelay(string text, float delay)
+    {
+        dialogueText.text = ""; // Clear text before delay
+        yield return new WaitForSeconds(delay);
+        typingCoroutine = StartCoroutine(TypeText(text));
     }
 
     IEnumerator TypeText(string text)
@@ -167,6 +185,11 @@ public class DialogueManager : MonoBehaviourPunCallbacks
     void EndDialogue()
     {
         Debug.Log("Dialogue finished, loading main game...");
+
+        // Hide host control text when dialogue ends
+        if (hostControlText != null)
+            hostControlText.gameObject.SetActive(false);
+
         Invoke("LoadMainGame", sceneTransitionDelay);
     }
 

@@ -265,14 +265,14 @@ public class LobbyManager : MonoBehaviourPunCallbacks
 
     private IEnumerator ShowLobbyWithDelay()
     {
-        yield return new WaitForSeconds(0.7f);
+        yield return new WaitForSeconds(0.5f);
         isLoadingTriggeredByUser = false;
         HideLoading();
         statusText.text = "Joined Room! Waiting for players...";
         if (roomCodeText != null)
         {
             string code = !string.IsNullOrEmpty(createdRoomCode) ? createdRoomCode : PhotonNetwork.CurrentRoom.Name;
-            roomCodeText.text = "Lobby Code: " + code;
+            roomCodeText.text = code;
             GUIUtility.systemCopyBuffer = code;
         }
         UpdatePlayerList();
@@ -359,7 +359,7 @@ public class LobbyManager : MonoBehaviourPunCallbacks
 
     private IEnumerator ShowJoinOrCreatePanelWithDelay()
     {
-        yield return new WaitForSeconds(1f);
+        yield return new WaitForSeconds(0.5f);
         HideLoading();
         ShowJoinOrCreatePanel();
         statusText.text = "Please enter a valid lobby code.";
@@ -386,11 +386,20 @@ public class LobbyManager : MonoBehaviourPunCallbacks
         if (i < players.Length)
         {
             string name = !string.IsNullOrEmpty(players[i].NickName) ? players[i].NickName : ($"Player {i + 1}");
-            bool ready = players[i].CustomProperties != null && players[i].CustomProperties.ContainsKey("Ready") && (bool)players[i].CustomProperties["Ready"];
+            bool ready = false;
+            if (players[i].CustomProperties != null && players[i].CustomProperties.ContainsKey("Ready"))
+            {
+                object readyObj = players[i].CustomProperties["Ready"];
+                if (readyObj is bool)
+                    ready = (bool)readyObj;
+                else if (readyObj is int)
+                    ready = ((int)readyObj) != 0;
+            }
             bool isHost = players[i].ActorNumber == PhotonNetwork.MasterClient.ActorNumber;
             string hostTag = isHost ? " (Host)" : "";
             string readyTag = ready ? " (Ready)" : "";
             playerSlots[i].text = name + hostTag + readyTag;
+            Debug.Log($"UpdatePlayerList: {name} host={isHost} ready={ready}");
         }
         else
         {

@@ -37,6 +37,7 @@ sysinfo.txt
 *.sln.dotsettings
 *.DotSettings.user
 *.meta.tmp
+[ALBURIOT/Assets/Imported Assets/]
 
 # OS
 .DS_Store

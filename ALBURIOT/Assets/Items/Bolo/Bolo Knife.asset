@@ -1,0 +1,28 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 49583e7f51600d243807eff9b726b809, type: 3}
+  m_Name: Bolo Knife
+  m_EditorClassIdentifier: Assembly-CSharp::ItemData
+  itemName: Bolo Knife
+  icon: {fileID: 21300000, guid: 8bcf4bafbc9b39449ad9f06752301805, type: 3}
+  description: A bolo knife
+  maxStack: 1
+  healthModifier: 0
+  staminaModifier: 0
+  damageModifier: 10
+  speedModifier: 0
+  staminaCostModifier: 0
+  modelPrefab: {fileID: 5737314805802655685, guid: f2d9995a14e0c974c8c15218a5c47f07, type: 3}
+  modelScale: {x: 0.5, y: 0.5, z: 0.5}
+  overrideTransform: 1
+  modelLocalPosition: {x: 0.00032, y: 0.00171, z: -0.00059}
+  modelLocalEulerAngles: {x: 0, y: 0, z: 180}

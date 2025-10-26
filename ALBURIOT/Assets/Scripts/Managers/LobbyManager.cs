@@ -28,6 +28,26 @@ public class LobbyManager : MonoBehaviourPunCallbacks
     private string pendingJoinCode = null;
     private string createdRoomCode = "";
     private bool isReady = false; // restored ready state
+    private bool forceOffline = false; // runtime-detected offline fallback
+
+    // offline helpers
+    bool HasInternet()
+    {
+        // simple reachability check; if behind captive portal or blocked, OnDisconnected will also trigger fallback
+        return Application.internetReachability != NetworkReachability.NotReachable;
+    }
+
+    void ActivateOfflineMode(string reason = null)
+    {
+        if (!PhotonNetwork.OfflineMode)
+        {
+            PhotonNetwork.OfflineMode = true;
+            Debug.Log("[Lobby] Activating Offline Mode" + (string.IsNullOrEmpty(reason) ? string.Empty : $": {reason}"));
+        }
+        forceOffline = true;
+        if (statusText != null) statusText.text = "Offline Mode: starting solo session";
+        if (loadingStatusText != null && isLoadingTriggeredByUser) loadingStatusText.text = "Offline Mode: creating local room...";
+    }
 
     [PunRPC]
     public void StartDialogueForAll()
@@ -52,8 +72,16 @@ public class LobbyManager : MonoBehaviourPunCallbacks
         isLoadingTriggeredByUser = false;
         HideLoading();
         ShowMainMenu();
-        statusText.text = "Connecting to Photon...";
-        PhotonNetwork.ConnectUsingSettings();
+        // try to connect only if we appear online; otherwise stay offline until user hosts/joins
+        if (HasInternet())
+        {
+            statusText.text = "Connecting to Photon...";
+            PhotonNetwork.ConnectUsingSettings();
+        }
+        else
+        {
+            ActivateOfflineMode("no internet detected");
+        }
         startGameButton.interactable = false;
         ClearPlayerSlots();
         if (roomCodeText != null) roomCodeText.text = "";
@@ -163,10 +191,23 @@ public class LobbyManager : MonoBehaviourPunCallbacks
         else
             PhotonNetwork.NickName = "Player";
 
-        if (!PhotonNetwork.IsConnected)
-            PhotonNetwork.ConnectUsingSettings();
-        else
+        // if offline or no internet, don't try to connect; go offline flow
+        if (!HasInternet())
+        {
+            ActivateOfflineMode("no internet for hosting");
             OnStartGameClicked();
+            return;
+        }
+
+        if (!PhotonNetwork.IsConnected && !PhotonNetwork.OfflineMode)
+        {
+            statusText.text = "Connecting to Photon...";
+            PhotonNetwork.ConnectUsingSettings();
+        }
+        else
+        {
+            OnStartGameClicked();
+        }
     }
 
     public void OnJoinGamePanelJoinClicked()
@@ -178,6 +219,16 @@ public class LobbyManager : MonoBehaviourPunCallbacks
             PhotonNetwork.NickName = nameInput.text;
         else
             PhotonNetwork.NickName = "Player";
+
+        // if offline or no internet, fallback to solo session
+        if (!HasInternet())
+        {
+            ActivateOfflineMode("no internet for joining");
+            // create a local room and continue
+            pendingJoinCode = null;
+            OnStartGameClicked();
+            return;
+        }
 
         if (joinCodeInput != null && !string.IsNullOrEmpty(joinCodeInput.text))
         {
@@ -225,16 +276,34 @@ public class LobbyManager : MonoBehaviourPunCallbacks
     {
         if (lobbyPanel != null) lobbyPanel.SetActive(false);
         isLoadingTriggeredByUser = true;
-        ShowLoading("Creating Room...");
-        statusText.text = "Creating Room...";
-        string roomName = GenerateLobbyCode();
+        ShowLoading(PhotonNetwork.OfflineMode ? "Creating Local Room..." : "Creating Room...");
+        statusText.text = PhotonNetwork.OfflineMode ? "Creating Local Room..." : "Creating Room...";
+
+        string roomName = PhotonNetwork.OfflineMode ? "OFFLINE" : GenerateLobbyCode();
         createdRoomCode = roomName;
-        PhotonNetwork.JoinOrCreateRoom(roomName, new RoomOptions { MaxPlayers = 4 }, TypedLobby.Default);
+
+        if (PhotonNetwork.OfflineMode)
+        {
+            // ensure offline mode is enabled and create a local room
+            RoomOptions ro = new RoomOptions { MaxPlayers = 1 };
+            PhotonNetwork.CreateRoom(roomName, ro, null);
+        }
+        else
+        {
+            PhotonNetwork.JoinOrCreateRoom(roomName, new RoomOptions { MaxPlayers = 4 }, TypedLobby.Default);
+        }
         // When host starts game, trigger dialogue for all
         if (PhotonNetwork.IsMasterClient)
         {
             PhotonView photonView = PhotonView.Get(this);
-            photonView.RPC("StartDialogueForAll", RpcTarget.All);
+            if (photonView != null)
+            {
+                photonView.RPC("StartDialogueForAll", RpcTarget.All);
+            }
+            else
+            {
+                Debug.LogWarning("[Lobby] PhotonView missing on LobbyManager; cannot broadcast StartDialogue. Add a PhotonView component.");
+            }
         }
     }
 
@@ -253,7 +322,7 @@ public class LobbyManager : MonoBehaviourPunCallbacks
     public override void OnJoinedRoom()
     {
         // If room is full, leave and show error
-        if (PhotonNetwork.CurrentRoom.PlayerCount > 4)
+        if (!PhotonNetwork.OfflineMode && PhotonNetwork.CurrentRoom.PlayerCount > 4)
         {
             ShowLoading("Lobby is full. Returning to join panel...");
             PhotonNetwork.LeaveRoom();
@@ -268,11 +337,11 @@ public class LobbyManager : MonoBehaviourPunCallbacks
         yield return new WaitForSeconds(0.5f);
         isLoadingTriggeredByUser = false;
         HideLoading();
-        statusText.text = "Joined Room! Waiting for players...";
+        statusText.text = PhotonNetwork.OfflineMode ? "Joined Local Session." : "Joined Room! Waiting for players...";
         if (roomCodeText != null)
         {
             string code = !string.IsNullOrEmpty(createdRoomCode) ? createdRoomCode : PhotonNetwork.CurrentRoom.Name;
-            roomCodeText.text = code;
+            roomCodeText.text = PhotonNetwork.OfflineMode ? "OFFLINE" : code;
             GUIUtility.systemCopyBuffer = code;
         }
         UpdatePlayerList();
@@ -285,7 +354,7 @@ public class LobbyManager : MonoBehaviourPunCallbacks
     bool isHost = PhotonNetwork.IsMasterClient;
     if (startGameButton != null) startGameButton.gameObject.SetActive(isHost);
     if (continueButton != null) continueButton.gameObject.SetActive(isHost);
-    if (readyButton != null) readyButton.gameObject.SetActive(!isHost);
+    if (readyButton != null) readyButton.gameObject.SetActive(!isHost && !PhotonNetwork.OfflineMode);
 
     // update ready button text for local player
     if (readyButton != null)
@@ -298,7 +367,7 @@ public class LobbyManager : MonoBehaviourPunCallbacks
         }
     }
 
-        if (isHost)
+        if (isHost && !PhotonNetwork.OfflineMode)
         {
             // Enable start if all joiners are ready, or if host is alone
             int joinerCount = PhotonNetwork.PlayerListOthers.Length;
@@ -353,6 +422,13 @@ public class LobbyManager : MonoBehaviourPunCallbacks
     public override void OnJoinRoomFailed(short returnCode, string message)
     {
         isLoadingTriggeredByUser = false;
+        // if we lost connection or can't reach master/room, fallback to offline
+        if (!HasInternet())
+        {
+            ActivateOfflineMode($"join failed: {message}");
+            OnStartGameClicked();
+            return;
+        }
         ShowLoading("Room code not found or join failed.");
         StartCoroutine(ShowJoinOrCreatePanelWithDelay());
     }
@@ -431,10 +507,42 @@ public class LobbyManager : MonoBehaviourPunCallbacks
         ShowMainMenu();
         if (lobbyPanel != null) lobbyPanel.SetActive(false);
         if (loadingPanel != null) loadingPanel.SetActive(false);
-        if (PhotonNetwork.InRoom) PhotonNetwork.LeaveRoom();
+        if (PhotonNetwork.InRoom && !PhotonNetwork.OfflineMode) PhotonNetwork.LeaveRoom();
         if (roomCodeText != null) roomCodeText.text = "";
         ClearPlayerSlots();
         createdRoomCode = "";
         pendingJoinCode = null;
+    }
+
+    // connection/disconnection handling
+    public override void OnDisconnected(DisconnectCause cause)
+    {
+        Debug.LogWarning($"[Lobby] Disconnected from Photon: {cause}");
+        if (!HasInternet() || cause == DisconnectCause.ServerTimeout || cause == DisconnectCause.ClientTimeout || cause == DisconnectCause.DnsExceptionOnConnect)
+        {
+            ActivateOfflineMode(cause.ToString());
+            // don't auto-create a room here; wait for user action unless they were already creating/joining
+            if (isLoadingTriggeredByUser)
+            {
+                OnStartGameClicked();
+            }
+        }
+        else
+        {
+            if (statusText != null) statusText.text = "Disconnected. Retry from menu.";
+        }
+    }
+
+    public override void OnCreateRoomFailed(short returnCode, string message)
+    {
+        Debug.LogWarning($"[Lobby] CreateRoom failed: {returnCode} {message}");
+        if (!HasInternet())
+        {
+            ActivateOfflineMode($"create failed: {message}");
+            OnStartGameClicked();
+            return;
+        }
+        ShowLoading("Create room failed.");
+        StartCoroutine(ShowJoinOrCreatePanelWithDelay());
     }
 }

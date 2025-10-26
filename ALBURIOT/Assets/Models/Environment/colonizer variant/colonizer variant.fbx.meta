@@ -1,7 +1,7 @@
 fileFormatVersion: 2
 guid: 6651111186083b047820f9ad3e30e100
 ModelImporter:
-  serializedVersion: 22200
+  serializedVersion: 24200
   internalIDToNameTable: []
   externalObjects:
   - first:
@@ -13,7 +13,7 @@ ModelImporter:
       type: UnityEngine:Texture2D
       assembly: UnityEngine.CoreModule
       name: shaded
-    second: {fileID: 2800000, guid: 32ce15c647c3317449032d712cc6cce3, type: 3}
+    second: {fileID: 2800000, guid: b9dc6a93d722b124fa5d44a9066cd8b7, type: 3}
   materials:
     materialImportMode: 2
     materialName: 0
@@ -66,6 +66,9 @@ ModelImporter:
     maxBonesPerVertex: 4
     minBoneWeight: 0.001
     optimizeBones: 1
+    generateMeshLods: 0
+    meshLodGenerationFlags: 0
+    maximumMeshLod: -1
     meshOptimizationFlags: -1
     indexFormat: 0
     secondaryUVAngleDistortion: 8

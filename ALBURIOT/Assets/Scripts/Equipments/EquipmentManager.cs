@@ -1,6 +1,7 @@
 using UnityEngine;
+using Photon.Pun;
 
-public class EquipmentManager : MonoBehaviour
+public class EquipmentManager : MonoBehaviourPun
 {
     public PlayerStats playerStats;
     public ItemData equippedItem;
@@ -12,6 +13,9 @@ public class EquipmentManager : MonoBehaviour
 
     public void Equip(ItemData item)
     {
+        // owner-only applies stats and inventory changes
+        var pv = photonView;
+        if (pv != null && !pv.IsMine) return;
         // If something is already equipped, return it to inventory before unequipping
         if (equippedItem != null)
         {
@@ -23,26 +27,64 @@ public class EquipmentManager : MonoBehaviour
         }
 
         equippedItem = item;
-        playerStats.ApplyEquipment(item);
+        if (playerStats != null && item != null) playerStats.ApplyEquipment(item);
 
-        // Handle 3D model
-        if (item.modelPrefab != null && handTransform != null)
+        // broadcast model equip to all clients using itemName as id
+        if (item != null)
         {
-            equippedModelInstance = Instantiate(item.modelPrefab, handTransform);
-            equippedModelInstance.transform.localPosition = Vector3.zero;
-            equippedModelInstance.transform.localRotation = Quaternion.identity;
-            equippedModelInstance.transform.localScale = item.modelScale;
+            string id = item.itemName;
+            if (pv != null && (PhotonNetwork.IsConnected || PhotonNetwork.OfflineMode))
+                pv.RPC(nameof(RPC_EquipModel), RpcTarget.All, id);
+            else
+                RPC_EquipModel(id);
         }
     }
 
     public void Unequip()
     {
+        var pv = photonView;
+        if (pv != null && !pv.IsMine) return;
         if (equippedItem != null)
         {
-            playerStats.RemoveEquipment(equippedItem);
+            // return the item to inventory when unequipping
+            if (playerInventory != null)
+            {
+                playerInventory.AddItem(equippedItem, 1);
+            }
+            if (playerStats != null) playerStats.RemoveEquipment(equippedItem);
             equippedItem = null;
         }
-        // Remove 3D model
+        // remove visuals across clients
+        if (pv != null && (PhotonNetwork.IsConnected || PhotonNetwork.OfflineMode))
+            pv.RPC(nameof(RPC_ClearModel), RpcTarget.All);
+        else
+            RPC_ClearModel();
+    }
+
+    [PunRPC]
+    private void RPC_EquipModel(string itemName)
+    {
+        // clear previous
+        RPC_ClearModel();
+        var db = ItemDatabase.Load();
+        var item = db != null ? db.FindByName(itemName) : null;
+        if (item != null && item.modelPrefab != null && handTransform != null)
+        {
+            equippedModelInstance = Instantiate(item.modelPrefab, handTransform);
+            // by default, keep prefab's local pose; apply only scale. allow optional overrides from ItemData
+            if (item.overrideTransform)
+            {
+                equippedModelInstance.transform.localPosition = item.modelLocalPosition;
+                equippedModelInstance.transform.localRotation = Quaternion.Euler(item.modelLocalEulerAngles);
+            }
+            // always apply scale
+            equippedModelInstance.transform.localScale = item.modelScale;
+        }
+    }
+
+    [PunRPC]
+    private void RPC_ClearModel()
+    {
         if (equippedModelInstance != null)
         {
             Destroy(equippedModelInstance);

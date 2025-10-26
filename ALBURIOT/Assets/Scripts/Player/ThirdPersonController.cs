@@ -13,12 +13,40 @@ public class ThirdPersonController : MonoBehaviourPun
 	public float gravity = -15f;
 	public Transform cameraPivot; // assign the CameraRig (the camera orbit root)
 
+	// roll / slide settings
+	[Header("roll / slide")]
+	public KeyCode rollKey = KeyCode.LeftControl;
+	public KeyCode alternateRollKey = KeyCode.C;
+	public float rollSpeed = 14f;
+	public float rollDuration = 0.45f;
+	public float rollCooldown = 0.6f;
+	public bool allowRightCtrlAlso = true; // convenience input
+	public int rollStaminaCost = 15;
+
+	[Header("jump settings")]
+	public int jumpStaminaCost = 10;
+
+	[Header("running stamina usage")]
+	[Tooltip("Stamina drained per second while running (Left Shift + forward). Set small value, e.g., 2-5.")]
+	public float runningStaminaDrainPerSecond = 3f;
+	private float runningStaminaDrainAccumulator = 0f;
+
 	private CharacterController controller;
 	private Vector3 verticalVelocity;
 	private Animator animator;
 	private bool isJumping = false;
 	private bool isCrouched = false; // placeholder, add crouch logic if needed
 	private bool attackPressed = false;
+	private bool isRunning = false; // centralized running state
+	public bool IsRunning => isRunning;
+	public bool IsRolling => isRolling;
+	private PlayerCombat combat;
+
+	// roll state
+	private bool isRolling = false;
+	private float rollTimer = 0f;
+	private float rollCooldownTimer = 0f;
+	private Vector3 rollDirection = Vector3.zero;
 
 	private bool canMove = true;
 	private bool canControl = true;
@@ -46,6 +74,7 @@ public class ThirdPersonController : MonoBehaviourPun
 	void Start()
 	{
 		playerStats = GetComponent<PlayerStats>();
+		combat = GetComponent<PlayerCombat>();
 
 		// Only enable camera/audio for local player
 		if (photonView != null && !photonView.IsMine)
@@ -67,11 +96,24 @@ public class ThirdPersonController : MonoBehaviourPun
 	if (Photon.Pun.PhotonNetwork.InRoom && photonView != null && !photonView.IsMine)
 		return; // Only allow local player to control
 
+		// always tick roll timers and stamina regen block regardless of movement gating
+		TickRollAndStaminaRegenBlock();
+
 	if (canControl)
 	{
 		if (canMove)
 		{
 			HandleMovement();
+		}
+		else
+		{
+			// zero input-driven horizontal velocity to prevent sliding/animation sticking
+			var vel = controller != null ? controller.velocity : Vector3.zero;
+			vel = new Vector3(0f, vel.y, 0f);
+			verticalVelocity = new Vector3(0f, verticalVelocity.y, 0f);
+			// cancel rolling state if any
+			isRolling = false;
+			rollTimer = 0f;
 		}
 	}
 	UpdateAnimator();
@@ -80,25 +122,35 @@ public class ThirdPersonController : MonoBehaviourPun
 	{
 		if (animator == null) return;
 
-		// Speed: use horizontal movement magnitude (ignore vertical)
-		float speed = new Vector3(controller.velocity.x, 0f, controller.velocity.z).magnitude;
+		// Speed: use horizontal movement magnitude (ignore vertical). If input is blocked, force 0.
+		float speed = canMove ? new Vector3(controller.velocity.x, 0f, controller.velocity.z).magnitude : 0f;
 		animator.SetFloat("Speed", speed);
 
 	    // IsWalking: moving (forward, backward, or sideways) but not running
-		// Consider walking if moving at any speed and not running (regardless of direction)
-		bool isRunning = Input.GetKey(KeyCode.LeftShift) && Input.GetAxisRaw("Vertical") > 0.5f && speed > 0.1f;
-		bool isWalking = speed > 0.1f && !isRunning;
+		// use centralized running state to keep animator consistent with movement/stamina
+		bool isWalking = speed > 0.1f && !isRunning && canMove;
 		animator.SetBool("IsWalking", isWalking);
 
-		// IsRunning: running (Shift + W)
-		isRunning = Input.GetKey(KeyCode.LeftShift) && Input.GetAxisRaw("Vertical") > 0.5f && speed > 0.1f;
-		animator.SetBool("IsRunning", isRunning);
+		// IsRunning: reflects actual run state (considering stamina, rolling, etc.)
+		// override to false during attack so animator can transition to attack even while player keeps moving fast
+		bool animatorRunning = canMove && isRunning;
+		if (combat != null && combat.IsAttacking)
+		{
+			animatorRunning = false;
+		}
+		animator.SetBool("IsRunning", animatorRunning);
 
 		// IsJumping: set true when jumping, false when grounded
 		animator.SetBool("IsJumping", isJumping);
 
 		// IsCrouched: placeholder, set to false (add crouch logic if needed)
 		animator.SetBool("IsCrouched", isCrouched);
+
+		// optional: sync rolling flag if animator has it
+		if (AnimatorHasParameter(animator, "IsRolling"))
+		{
+			animator.SetBool("IsRolling", isRolling);
+		}
 	}
 
 	void HandleMovement()
@@ -135,24 +187,83 @@ public class ThirdPersonController : MonoBehaviourPun
 		}
 		if (move.sqrMagnitude > 1f) move.Normalize();
 
-		// rotate player to match camera yaw, unless in free look
-		if (cameraOrbit != null && !Input.GetMouseButton(1)) // not in free look
+		// try start roll if ctrl or 'c' is pressed and we have a move direction
+		if (!isRolling && controller.isGrounded)
 		{
-			Quaternion targetRot = Quaternion.Euler(0f, cameraOrbit.transform.eulerAngles.y, 0f);
+			bool rollPressed = Input.GetKeyDown(rollKey) || (allowRightCtrlAlso && Input.GetKeyDown(KeyCode.RightControl)) || Input.GetKeyDown(alternateRollKey);
+			bool rooted = playerStats != null && playerStats.IsRooted;
+			bool silenced = playerStats != null && playerStats.IsSilenced;
+			bool stunned = playerStats != null && playerStats.IsStunned;
+			if (rollPressed && !rooted && !stunned && !silenced && move.sqrMagnitude > 0.001f && rollCooldownTimer <= 0f)
+			{
+				// stamina check
+				bool hasStats = playerStats != null;
+				int finalCost = rollStaminaCost;
+				if (hasStats)
+				{
+					finalCost = Mathf.Max(1, rollStaminaCost + playerStats.staminaCostModifier);
+				}
+				if (!hasStats || playerStats.UseStamina(finalCost))
+				{
+					isRolling = true;
+					rollTimer = rollDuration;
+					rollDirection = move.normalized;
+					// face roll direction instantly
+					if (rollDirection.sqrMagnitude > 0.001f)
+					{
+						Quaternion lookRot = Quaternion.LookRotation(rollDirection, Vector3.up);
+						transform.rotation = lookRot;
+					}
+					// animator trigger if available
+					if (animator != null && AnimatorHasParameter(animator, "Roll"))
+					{
+						animator.SetTrigger("Roll");
+					}
+					Debug.Log($"player roll start, stamina cost: {finalCost}");
+				}
+				else
+				{
+					Debug.Log("not enough stamina to roll!");
+				}
+			}
+		}
+
+		// face movement direction during walk/run (not while rolling)
+		if (!isRolling && move.sqrMagnitude > 0.0001f)
+		{
+			Quaternion targetRot = Quaternion.LookRotation(move.normalized, Vector3.up);
 			transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, rotationSpeed * Time.deltaTime);
 		}
 
-		// running: if Shift and W are pressed, use runSpeed for forward movement
-		float currentSpeed = moveSpeed;
-		if (playerStats != null)
-			currentSpeed += playerStats.speedModifier;
-		if (Input.GetKey(KeyCode.LeftShift) && v > 0.5f)
+		Vector3 horizontal = Vector3.zero;
+		if (isRolling)
 		{
-			currentSpeed = runSpeed;
-			if (playerStats != null)
-				currentSpeed += playerStats.speedModifier;
+			// while rolling, override horizontal movement
+			float currentRollSpeed = rollSpeed;
+			if (playerStats != null) currentRollSpeed += Mathf.Max(0f, playerStats.speedModifier);
+			horizontal = rollDirection * currentRollSpeed;
 		}
-		Vector3 horizontal = move * currentSpeed;
+		else
+		{
+			// running: if run state is true, use runSpeed for movement
+			float currentSpeed = moveSpeed;
+			if (playerStats != null)
+			{
+				currentSpeed += playerStats.speedModifier;
+				// apply slow percentage to both walk and run
+				currentSpeed *= (1f - Mathf.Clamp01(playerStats.slowPercent));
+			}
+			if (isRunning)
+			{
+				currentSpeed = runSpeed;
+				if (playerStats != null)
+				{
+					currentSpeed += playerStats.speedModifier;
+					currentSpeed *= (1f - Mathf.Clamp01(playerStats.slowPercent));
+				}
+			}
+			horizontal = move * currentSpeed;
+		}
 
 		// grounding and jumping
 		bool isGrounded = controller.isGrounded;
@@ -160,10 +271,25 @@ public class ThirdPersonController : MonoBehaviourPun
 		{
 			verticalVelocity.y = -2f;
 		}
-		if (Input.GetKeyDown(KeyCode.Space) && isGrounded)
+		bool canJump = !isRolling && Input.GetKeyDown(KeyCode.Space) && isGrounded;
+		if (playerStats != null && (playerStats.IsRooted || playerStats.IsStunned)) canJump = false;
+		if (canJump)
 		{
-			verticalVelocity.y = Mathf.Sqrt(jumpHeight * -2f * gravity);
-			isJumping = true;
+			// stamina check for jumping
+			int finalJumpCost = jumpStaminaCost;
+			if (playerStats != null)
+				finalJumpCost = Mathf.Max(1, jumpStaminaCost + playerStats.staminaCostModifier);
+			bool canSpend = playerStats == null || playerStats.UseStamina(finalJumpCost);
+			if (canSpend)
+			{
+				verticalVelocity.y = Mathf.Sqrt(jumpHeight * -2f * gravity);
+				isJumping = true;
+				Debug.Log($"player jump, stamina cost: {finalJumpCost}");
+			}
+			else
+			{
+				Debug.Log("not enough stamina to jump!");
+			}
 		}
 		if (isGrounded && verticalVelocity.y <= 0f)
 		{
@@ -176,11 +302,71 @@ public class ThirdPersonController : MonoBehaviourPun
 		Vector3 finalMove = horizontal + verticalVelocity;
 		controller.Move(finalMove * Time.deltaTime);
 
-		// Escape releases cursor
-		if (Input.GetKeyDown(KeyCode.Escape))
+		// do not override Esc here; handled by PauseMenuController to avoid camera drifting
+	}
+
+	// utility: check animator has parameter to avoid warnings
+	private bool AnimatorHasParameter(Animator anim, string paramName)
+	{
+		if (anim == null) return false;
+		foreach (var p in anim.parameters)
 		{
-			Cursor.lockState = CursorLockMode.None;
-			Cursor.visible = true;
+			if (p.name == paramName) return true;
+		}
+		return false;
+	}
+
+	// tick timers and stamina regen block every frame, independent of movement gating
+	private void TickRollAndStaminaRegenBlock()
+	{
+		// roll timer and cooldown
+		if (isRolling)
+		{
+			rollTimer -= Time.deltaTime;
+			if (rollTimer <= 0f)
+			{
+				isRolling = false;
+				rollCooldownTimer = rollCooldown;
+				Debug.Log("player roll end");
+			}
+		}
+		if (rollCooldownTimer > 0f)
+		{
+			rollCooldownTimer -= Time.deltaTime;
+		}
+
+		// stamina regen blocking: block when running (any direction with shift) or when rolling
+		if (playerStats != null)
+		{
+			bool moving = (Mathf.Abs(Input.GetAxisRaw("Horizontal")) > 0.5f || Mathf.Abs(Input.GetAxisRaw("Vertical")) > 0.5f);
+			bool running = (canControl && canMove) && Input.GetKey(KeyCode.LeftShift) && moving && !isRolling && (playerStats == null || playerStats.currentStamina > 0);
+			isRunning = running;
+			bool blockRegen = isRunning || isRolling;
+			playerStats.SetStaminaRegenBlocked(blockRegen);
+		}
+	}
+
+	// apply running stamina drain after Update to avoid racing with attack spending
+	void LateUpdate()
+	{
+		if (Photon.Pun.PhotonNetwork.InRoom && photonView != null && !photonView.IsMine)
+			return;
+		if (playerStats == null) return;
+		if (isRunning && runningStaminaDrainPerSecond > 0f)
+		{
+			float rate = Mathf.Max(0f, runningStaminaDrainPerSecond + playerStats.staminaCostModifier);
+			runningStaminaDrainAccumulator += rate * Time.deltaTime;
+			if (runningStaminaDrainAccumulator >= 1f)
+			{
+				int drainInt = Mathf.FloorToInt(runningStaminaDrainAccumulator);
+				int available = Mathf.Max(0, playerStats.currentStamina);
+				int toDrain = Mathf.Min(drainInt, available);
+				if (toDrain > 0)
+				{
+					playerStats.UseStamina(toDrain);
+					runningStaminaDrainAccumulator -= toDrain;
+				}
+			}
 		}
 	}
 }

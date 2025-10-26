@@ -5,6 +5,7 @@ using UnityEngine.UI;
 using TMPro;
 using UnityEngine.SceneManagement;
 using System.Collections;
+using UnityEngine.Video;
 
 public class DialogueManager : MonoBehaviourPunCallbacks
 {
@@ -27,14 +28,60 @@ public class DialogueManager : MonoBehaviourPunCallbacks
             DisplayNextLine();
         }
     }
-    public Image backgroundImage; // Assign your "Background Image" in inspector
-    public Sprite[] backgroundSprites; // Assign your 5 sprites in inspector
+    // background video per line (replaces background image per line)
+    [Header("Background Video (per line)")]
+    [Tooltip("RawImage to display the background video (behind dialogue)")]
+    public RawImage backgroundVideoImage;
+    [Tooltip("VideoPlayer used for background clips")]
+    public VideoPlayer backgroundPlayer;
+    [Tooltip("Background video clips corresponding to each dialogue line index")]
+    public VideoClip[] backgroundClips;
+    [Tooltip("Loop the current background clip while a line is active")]
+    public bool loopClips = true;
     [Header("Dialogue UI")]
     public TextMeshProUGUI dialogueText;
     public TextMeshProUGUI hostControlText; // assign in inspector
     public GameObject dialoguePanel;
     public Button continueButton;
     public Button skipButton;
+
+    [Header("Flicker Effect")]
+    [Tooltip("enable a light flicker effect on each dialogue transition. not a fade.")]
+    public bool enableFlicker = true;
+    [Tooltip("full-screen black Image overlay sitting above background video and below text.")]
+    public Image flickerOverlay;
+    [Tooltip("duration of the 'flicker on' when a line starts.")]
+    public float flickerOnDuration = 0.35f;
+    [Tooltip("duration of the 'flicker off' when leaving a line.")]
+    public float flickerOffDuration = 0.20f;
+    [Tooltip("random interval range (seconds) between flicker pulses.")]
+    public Vector2 flickerIntervalRange = new Vector2(0.03f, 0.12f);
+    [Tooltip("min alpha for the dark pulses (0 clear, 1 full black)")]
+    [Range(0f, 1f)] public float flickerDarkMin = 0.6f;
+    [Tooltip("extra delay after flicker completes before typing starts")]
+    public float postFlickerDelay = 0.05f;
+
+    [Header("Audio")]
+    [Tooltip("audio source used to play narration clips (per line).")]
+    public AudioSource narrationSource;
+    [Tooltip("narration clips matched to dialogue lines by index.")]
+    public AudioClip[] narrationClips;
+    [Tooltip("loop the narration clip.")]
+    public bool narrationLoop = false;
+    [Tooltip("audio source used to play ui sfx (switch on/off).")]
+    public AudioSource sfxSource;
+    [Tooltip("sfx for light switching ON (played at start of FlickerOn).")]
+    public AudioClip switchOnSfx;
+    [Tooltip("sfx for light switching OFF (played at start of FlickerOff).")]
+    public AudioClip switchOffSfx;
+
+    [Header("testing / editor")]
+    [Tooltip("when enabled, continue/skip will be available locally in the editor or when not connected to photon.")]
+    public bool enableLocalTestingControls = true;
+    [Tooltip("force local control regardless of photon connection state (useful when you deliberately want solo control in editor).")]
+    public bool forceLocalControl = false;
+
+    private bool allowLocalControl = false; // computed at runtime
 
     [Header("Dialogue Content")]
     [TextArea(3, 10)]
@@ -59,23 +106,35 @@ public class DialogueManager : MonoBehaviourPunCallbacks
         if (hostControlText != null)
             hostControlText.gameObject.SetActive(false);
 
-        // Set up button listeners for host only
-        if (PhotonNetwork.IsMasterClient)
+        // prepare flicker overlay
+        if (flickerOverlay != null)
+        {
+            var c = flickerOverlay.color; c.a = 1f; flickerOverlay.color = c; // start black
+            flickerOverlay.gameObject.SetActive(true);
+        }
+
+        // decide if we allow local control for testing
+        // rules: forceLocalControl OR (not connected/in room) OR (in editor and enableLocalTestingControls)
+        bool notConnectedOrNoRoom = !PhotonNetwork.IsConnected || !PhotonNetwork.InRoom;
+        allowLocalControl = forceLocalControl || notConnectedOrNoRoom || (Application.isEditor && enableLocalTestingControls);
+
+        // Set up button listeners for host, or enable for local testing
+        if (PhotonNetwork.IsMasterClient || allowLocalControl)
         {
             if (continueButton != null)
                 continueButton.onClick.AddListener(OnHostContinueClicked);
             if (skipButton != null)
                 skipButton.onClick.AddListener(OnHostSkipClicked);
+            if (continueButton != null) continueButton.gameObject.SetActive(true);
+            if (skipButton != null) skipButton.gameObject.SetActive(true);
         }
         else
         {
-            // Hide buttons for joiners
             if (continueButton != null)
                 continueButton.gameObject.SetActive(false);
             if (skipButton != null)
                 skipButton.gameObject.SetActive(false);
         }
-
         // Start dialogue after a short delay
         Invoke("StartDialogue", 1.5f);
     }
@@ -98,12 +157,8 @@ public class DialogueManager : MonoBehaviourPunCallbacks
             if (typingCoroutine != null)
                 StopCoroutine(typingCoroutine);
 
-            // Change background image sprite for this line
-            if (backgroundImage != null && backgroundSprites != null && currentLine < backgroundSprites.Length)
-                backgroundImage.sprite = backgroundSprites[currentLine];
-
-            // Add delay before showing the line
-            StartCoroutine(ShowLineWithDelay(dialogueLines[currentLine], 1f));
+            // transition with flicker and then show the line
+            StartCoroutine(DoLineTransitionAndShow(currentLine));
         }
         else
         {
@@ -135,7 +190,15 @@ public class DialogueManager : MonoBehaviourPunCallbacks
     // called by host only
     public void OnHostContinueClicked()
     {
-        photonView.RPC("RPC_ContinueDialogue", RpcTarget.All);
+        if (allowLocalControl || !PhotonNetwork.IsConnected || !PhotonNetwork.InRoom)
+        {
+            Debug.Log("dialogue: local continue (testing mode)");
+            RPC_ContinueDialogue();
+        }
+        else
+        {
+            photonView.RPC("RPC_ContinueDialogue", RpcTarget.All);
+        }
     }
 
     [PunRPC]
@@ -167,7 +230,15 @@ public class DialogueManager : MonoBehaviourPunCallbacks
     // called by host only
     public void OnHostSkipClicked()
     {
-        photonView.RPC("RPC_SkipDialogue", RpcTarget.All);
+        if (allowLocalControl || !PhotonNetwork.IsConnected || !PhotonNetwork.InRoom)
+        {
+            Debug.Log("dialogue: local skip (testing mode)");
+            RPC_SkipDialogue();
+        }
+        else
+        {
+            photonView.RPC("RPC_SkipDialogue", RpcTarget.All);
+        }
     }
 
     [PunRPC]
@@ -190,11 +261,161 @@ public class DialogueManager : MonoBehaviourPunCallbacks
         if (hostControlText != null)
             hostControlText.gameObject.SetActive(false);
 
+        // stop background video
+        if (backgroundPlayer != null)
+        {
+            backgroundPlayer.Stop();
+        }
+        if (backgroundVideoImage != null)
+        {
+            backgroundVideoImage.gameObject.SetActive(false);
+        }
+
+        // ensure overlay not blocking after end
+        if (flickerOverlay != null)
+        {
+            var c = flickerOverlay.color; c.a = 0f; flickerOverlay.color = c;
+        }
+
+        // stop audio
+        if (narrationSource != null) narrationSource.Stop();
+        if (sfxSource != null) sfxSource.Stop();
+
         Invoke("LoadMainGame", sceneTransitionDelay);
     }
 
     void LoadMainGame()
     {
         Photon.Pun.PhotonNetwork.LoadLevel("TUTORIAL");
+    }
+
+    // ---------------- background video helpers ----------------
+    void SetupBackgroundVideoForLine(int index)
+    {
+        if (backgroundPlayer == null || backgroundVideoImage == null || backgroundClips == null || index >= backgroundClips.Length)
+        {
+            return;
+        }
+
+        var clip = backgroundClips[index];
+        if (clip == null)
+        {
+            return;
+        }
+
+        StartCoroutine(PrepareAndPlayBackground(index));
+    }
+
+    IEnumerator PrepareAndPlayBackground(int index)
+    {
+        var clip = backgroundClips[index];
+        if (clip == null) yield break;
+
+        backgroundPlayer.Stop();
+        backgroundPlayer.isLooping = loopClips;
+        backgroundPlayer.renderMode = VideoRenderMode.APIOnly;
+        backgroundPlayer.clip = clip;
+
+        backgroundVideoImage.gameObject.SetActive(true);
+
+        backgroundPlayer.Prepare();
+        while (!backgroundPlayer.isPrepared)
+            yield return null;
+
+        backgroundVideoImage.texture = backgroundPlayer.texture;
+        backgroundPlayer.Play();
+    }
+
+    // ---------------- flicker helpers ----------------
+    IEnumerator DoLineTransitionAndShow(int index)
+    {
+        bool isFirstLine = index == 0;
+
+        if (enableFlicker && flickerOverlay != null && !isFirstLine)
+        {
+            // play switch off at the start of flicker off
+            PlaySfx(switchOffSfx);
+            yield return FlickerOff();
+        }
+
+        // update background (prepare + play)
+        SetupBackgroundVideoForLine(index);
+
+        if (enableFlicker && flickerOverlay != null)
+        {
+            // play switch on at the start of flicker on
+            PlaySfx(switchOnSfx);
+            yield return FlickerOn();
+        }
+
+        // small delay after flicker to settle
+        if (postFlickerDelay > 0f)
+            yield return new WaitForSeconds(postFlickerDelay);
+
+        // play narration for this line (if any)
+        PlayNarrationForIndex(index);
+
+        // type the line
+        typingCoroutine = StartCoroutine(ShowLineWithDelay(dialogueLines[index], 0f));
+    }
+
+    IEnumerator FlickerOn()
+    {
+        float elapsed = 0f;
+        SetOverlayAlpha(1f); // start dark
+        while (elapsed < flickerOnDuration)
+        {
+            // random pulses between fully on (clear) and dark flashes
+            float next = Random.value < 0.5f ? 0f : Random.Range(flickerDarkMin, 1f);
+            SetOverlayAlpha(next);
+            float wait = Random.Range(flickerIntervalRange.x, flickerIntervalRange.y);
+            elapsed += wait;
+            yield return new WaitForSeconds(wait);
+        }
+        SetOverlayAlpha(0f); // end with lights on (clear)
+    }
+
+    IEnumerator FlickerOff()
+    {
+        float elapsed = 0f;
+        // start mostly lit
+        SetOverlayAlpha(0f);
+        while (elapsed < flickerOffDuration)
+        {
+            float next = Random.value < 0.5f ? 1f : Random.Range(flickerDarkMin, 1f);
+            // also sprinkle clears to feel like unstable power
+            if (Random.value < 0.25f) next = 0f;
+            SetOverlayAlpha(next);
+            float wait = Random.Range(flickerIntervalRange.x, flickerIntervalRange.y);
+            elapsed += wait;
+            yield return new WaitForSeconds(wait);
+        }
+        SetOverlayAlpha(1f); // end with lights off (black)
+    }
+
+    void SetOverlayAlpha(float a)
+    {
+        if (flickerOverlay == null) return;
+        var c = flickerOverlay.color;
+        c.a = Mathf.Clamp01(a);
+        flickerOverlay.color = c;
+    }
+
+    // ---------------- audio helpers ----------------
+    void PlayNarrationForIndex(int index)
+    {
+        if (narrationSource == null || narrationClips == null || index >= narrationClips.Length)
+            return;
+        var clip = narrationClips[index];
+        if (clip == null) return;
+        narrationSource.loop = narrationLoop;
+        narrationSource.clip = clip;
+        narrationSource.Play();
+    }
+
+    void PlaySfx(AudioClip clip)
+    {
+        if (sfxSource == null || clip == null) return;
+        sfxSource.PlayOneShot(clip);
     }
 }

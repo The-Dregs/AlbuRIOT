@@ -44,6 +44,49 @@ MonoBehaviour:
   - RPC_SkipDialogue
   - RPC_RefreshPlayerList
   - RPC_DebugReadyState
+  - RPC_PlayDeath
+  - RPC_PlayHit
+  - RPC_TakeDamage
+  - RPC_ApplyDamage
+  - RPC_AssignAbilitySlot1ByPath
+  - RPC_PlayAnimTrigger
+  - RPC_ApplyDebuff
+  - RPC_AddKillProgress
+  - RPC_AddReachProgress
+  - RPC_ClearModel
+  - RPC_EquipModel
+  - RPC_RequestDestroy
+  - RPC_ActivateShrine
+  - RPC_AddItem
+  - RPC_AddScore
+  - RPC_ChatMessage
+  - RPC_CompleteQuest
+  - RPC_ExecuteSpecialMove
+  - RPC_LosePower
+  - RPC_MakeOffering
+  - RPC_PauseGame
+  - RPC_PickupItem
+  - RPC_PlayDebuffVFX
+  - RPC_PlayMovesetVFX
+  - RPC_PlayPowerStealVFX
+  - RPC_RemoveItem
+  - RPC_RemovePower
+  - RPC_ResumeGame
+  - RPC_SetGameState
+  - RPC_SetMoveset
+  - RPC_StartGame
+  - RPC_StartQuest
+  - RPC_StealPower
+  - RPC_SwapSlots
+  - RPC_SyncGameState
+  - RPC_SyncItemPickup
+  - RPC_SyncMovesetState
+  - RPC_SyncQuestProgress
+  - RPC_SyncQuestState
+  - RPC_UpdateObjectiveProgress
+  - RPC_OnDeathFX
+  - RPC_PlayTrigger
+  - RPC_EnemyTakeDamage
   DisableAutoOpenWizard: 1
   ShowSettings: 1
   DevRegionSetOnce: 1

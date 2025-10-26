@@ -33,10 +33,16 @@ public class ThirdPersonCameraOrbit : MonoBehaviour
 	private float pitch;
 	private bool isFreeLook = false;
 	public bool cameraControlActive = true; // set by controller
+	private bool rotationLocked = false; // when true, camera follows position but ignores mouse rotation
 
 	public void SetCameraControlActive(bool value)
 	{
 		cameraControlActive = value;
+	}
+
+	public void SetRotationLocked(bool value)
+	{
+		rotationLocked = value;
 	}
 
 	void Start()
@@ -60,18 +66,21 @@ public class ThirdPersonCameraOrbit : MonoBehaviour
 		float mouseX = Input.GetAxis("Mouse X") * mouseSensitivity * Time.deltaTime;
 		float mouseY = Input.GetAxis("Mouse Y") * mouseSensitivity * Time.deltaTime;
 
-		if (rightMouseHeld)
+		if (!rotationLocked)
 		{
-			isFreeLook = true;
-			yaw += mouseX;
-			pitch = Mathf.Clamp(pitch - mouseY, minPitch, maxPitch);
-		}
-		else
-		{
-			// camera always follows mouse movement and rotates player
-			yaw += mouseX;
-			pitch = Mathf.Clamp(pitch - mouseY, minPitch, maxPitch);
-			isFreeLook = false;
+			if (rightMouseHeld)
+			{
+				isFreeLook = true;
+				yaw += mouseX;
+				pitch = Mathf.Clamp(pitch - mouseY, minPitch, maxPitch);
+			}
+			else
+			{
+				// normal: rotate camera with mouse
+				yaw += mouseX;
+				pitch = Mathf.Clamp(pitch - mouseY, minPitch, maxPitch);
+				isFreeLook = false;
+			}
 		}
 
 		// Set camera rig rotation

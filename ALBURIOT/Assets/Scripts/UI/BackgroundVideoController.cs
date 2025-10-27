@@ -20,6 +20,12 @@ public class BackgroundVideoController : MonoBehaviour
     public int renderTextureHeight = 1080;
     public RenderTextureFormat renderTextureFormat = RenderTextureFormat.ARGB32;
 
+    [Header("fallback")]
+    // optional fallback texture to show when video is missing or fails to play
+    public Texture2D fallbackTexture;
+    // if no fallbackTexture is provided, RawImage will be set to this color
+    public Color fallbackColor = Color.black;
+
     private RenderTexture _rt;
 
     void Awake()
@@ -78,6 +84,11 @@ public class BackgroundVideoController : MonoBehaviour
             else if (videoPlayer.texture != null)
             {
                 rawImage.texture = videoPlayer.texture;
+            }
+            // if still no texture assigned, use fallback
+            if (rawImage.texture == null)
+            {
+                AssignFallback();
             }
         }
 
@@ -138,7 +149,11 @@ public class BackgroundVideoController : MonoBehaviour
         if (rawImage != null && source != null && source.texture != null)
         {
             rawImage.texture = source.texture;
+            return;
         }
+
+        // otherwise use configured fallback
+        AssignFallback();
     }
 
     void OnVideoPrepared(VideoPlayer source)
@@ -170,6 +185,22 @@ public class BackgroundVideoController : MonoBehaviour
             if (videoPlayer != null && ReferenceEquals(videoPlayer.targetTexture, _rt)) videoPlayer.targetTexture = null;
             _rt.Release();
             Destroy(_rt);
+        }
+    }
+
+    // set the fallback on the RawImage: prefer the texture, otherwise set a solid color
+    void AssignFallback()
+    {
+        if (rawImage == null) return;
+        if (fallbackTexture != null)
+        {
+            rawImage.texture = fallbackTexture;
+            rawImage.color = Color.white;
+        }
+        else
+        {
+            rawImage.texture = null;
+            rawImage.color = fallbackColor;
         }
     }
 }

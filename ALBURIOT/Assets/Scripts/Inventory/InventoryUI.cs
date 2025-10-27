@@ -76,20 +76,21 @@ public class InventoryUI : MonoBehaviour
     public void OpenInventory()
     {
         AutoWireIfNeeded();
-        // attempt to register with the global UI gate; if blocked by a stale owner,
-        // force-close and proceed. This avoids the panel staying hidden when the
-        // previous UI forgot to release its lock between scenes.
         var ui = LocalUIManager.Ensure();
-        if (!ui.TryOpen("Inventory"))
-        {
+        // enforce strict exclusivity: do not open if any other UI is open
+        if (ui.IsAnyOpen && !ui.IsOwner("Inventory")) {
+            Debug.LogWarning("[inventory] cannot open: another UI is already open");
+            return;
+        }
+        if (!ui.TryOpen("Inventory")) {
             Debug.LogWarning($"[inventory] TryOpen blocked by '{ui.CurrentOwner}', forcing close and opening inventory.");
             ui.ForceClose();
             ui.TryOpen("Inventory");
         }
-    EnsurePanelReference();
-    SetPanelVisible(true);
+        EnsurePanelReference();
+        SetPanelVisible(true);
         Debug.Log("[inventory] open inventory ui");
-    _isOpen = true;
+        _isOpen = true;
         RefreshUI();
         if (_inputLockToken == 0)
             _inputLockToken = LocalInputLocker.Ensure().Acquire("Inventory", lockMovement:false, lockCombat:true, lockCamera:true, cursorUnlock:true);

@@ -2,6 +2,7 @@ using UnityEngine;
 using Photon.Pun;
 using TMPro;
 using UnityEngine.UI;
+using AlbuRIOT.AI.BehaviorTree;
 
 public class ShadowTouchedDiwataAI : MonoBehaviourPun
 {
@@ -19,6 +20,7 @@ public class ShadowTouchedDiwataAI : MonoBehaviourPun
     public float veilWindup = 0.9f;
     public float veilStealthDuration = 2.0f;
     public float veilMoveSpeed = 8.0f;
+     public float veilRadius = 5.0f; // radius for Eclipse Veil AOE
 
     [Header("Lament of the Void")]
     public int lamentDamage = 18;
@@ -44,6 +46,7 @@ public class ShadowTouchedDiwataAI : MonoBehaviourPun
     public string hitTrigger = "Hit";
     public string dieTrigger = "Die";
     public string isDeadBool = "IsDead";
+    public string busyBool = "Busy";
 
     [Header("behavior")]
     public bool enablePatrol = true;
@@ -95,7 +98,7 @@ public class ShadowTouchedDiwataAI : MonoBehaviourPun
 
     // cooldown helpers
     public float BasicCooldownRemaining => Mathf.Max(0f, basicCooldown - (Time.time - lastBasicTime));
-    public float EclipseVeilCooldownRemaining => Mathf.Max(0f, eclipseVeilCooldown - (Time.time - lastEclipseVeilTime));
+    public float EclipseVeilCooldownRemaining => Mathf.Max(0f, veilCooldown - (Time.time - lastEclipseVeilTime));
     public float LamentCooldownRemaining => Mathf.Max(0f, lamentCooldown - (Time.time - lastLamentTime));
 
     private void Awake()
@@ -366,11 +369,11 @@ public class ShadowTouchedDiwataAI : MonoBehaviourPun
         if (IsBusy) return false;
         if (postSpecialTimer > 0f) return false;
         if (isVeiling) return false;
-        if (Time.time - lastEclipseVeilTime < eclipseVeilCooldown) return false;
+    if (Time.time - lastEclipseVeilTime < veilCooldown) return false;
         var t = bb.Get<Transform>("target");
         if (t == null) return false;
-        float d = Vector3.Distance(transform.position, t.position);
-        return d <= eclipseVeilRange + 2f;
+    float d = Vector3.Distance(transform.position, t.position);
+    return d <= veilRange + 2f;
     }
 
     private NodeState DoEclipseVeil()
@@ -386,7 +389,7 @@ public class ShadowTouchedDiwataAI : MonoBehaviourPun
     {
         currentAction = ActionState.Veil;
         isVeiling = true;
-        float wind = eclipseVeilWindup;
+    float wind = veilWindup;
         float timeout = abilityHardTimeout;
         if (animator != null && HasTrigger(eclipseVeilTrigger)) animator.SetTrigger(eclipseVeilTrigger);
         var t = bb.Get<Transform>("target");
@@ -399,13 +402,13 @@ public class ShadowTouchedDiwataAI : MonoBehaviourPun
             yield return null;
         }
         // AOE stealth/debuff
-        var cols = Physics.OverlapSphere(transform.position, eclipseVeilRadius, LayerMask.GetMask("Player"));
+    var cols = Physics.OverlapSphere(transform.position, veilRadius, LayerMask.GetMask("Player"));
         foreach (var c in cols)
         {
             var ps = c.GetComponentInParent<PlayerStats>();
             if (ps != null)
             {
-                DamageRelay.ApplyToPlayer(ps.gameObject, eclipseVeilDamage);
+                DamageRelay.ApplyToPlayer(ps.gameObject, veilDamage);
                 // TODO: apply stealth/debuff effect via PlayerStatusRelay
             }
         }
@@ -596,9 +599,20 @@ public class ShadowTouchedDiwataAI : MonoBehaviourPun
     {
         if (isDead) return;
         isDead = true;
+        if (activeAbility != null)
+        {
+            try { StopCoroutine(activeAbility); } catch { }
+            activeAbility = null;
+        }
         if (animator != null)
         {
+            foreach (var p in animator.parameters)
+            {
+                if (p.type == AnimatorControllerParameterType.Trigger)
+                    animator.ResetTrigger(p.name);
+            }
             if (HasBool(isDeadBool)) animator.SetBool(isDeadBool, true);
+            if (HasBool(busyBool)) animator.SetBool(busyBool, false);
             if (HasTrigger(dieTrigger)) animator.SetTrigger(dieTrigger);
         }
         if (controller != null) controller.enabled = false;

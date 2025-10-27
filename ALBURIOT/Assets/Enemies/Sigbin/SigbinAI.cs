@@ -2,6 +2,7 @@ using UnityEngine;
 using Photon.Pun;
 using TMPro;
 using UnityEngine.UI;
+using AlbuRIOT.AI.BehaviorTree;
 
 public class SigbinAI : MonoBehaviourPun
 {
@@ -44,6 +45,7 @@ public class SigbinAI : MonoBehaviourPun
     public string hitTrigger = "Hit";
     public string dieTrigger = "Die";
     public string isDeadBool = "IsDead";
+    public string busyBool = "Busy";
 
     [Header("behavior")]
     public bool enablePatrol = true;
@@ -95,7 +97,7 @@ public class SigbinAI : MonoBehaviourPun
 
     // cooldown helpers
     public float BasicCooldownRemaining => Mathf.Max(0f, basicCooldown - (Time.time - lastBasicTime));
-    public float BackstepCooldownRemaining => Mathf.Max(0f, backstepCooldown - (Time.time - lastBackstepTime));
+    public float BackstepCooldownRemaining => Mathf.Max(0f, slashCooldown - (Time.time - lastBackstepTime));
     public float DrainCooldownRemaining => Mathf.Max(0f, drainCooldown - (Time.time - lastDrainTime));
 
     private void Awake()
@@ -366,11 +368,11 @@ public class SigbinAI : MonoBehaviourPun
         if (IsBusy) return false;
         if (postSpecialTimer > 0f) return false;
         if (isBackstepping) return false;
-        if (Time.time - lastBackstepTime < backstepCooldown) return false;
+    if (Time.time - lastBackstepTime < slashCooldown) return false;
         var t = bb.Get<Transform>("target");
         if (t == null) return false;
-        float d = Vector3.Distance(transform.position, t.position);
-        return d <= backstepRange + 2f;
+    float d = Vector3.Distance(transform.position, t.position);
+    return d <= slashRange + 2f;
     }
 
     private NodeState DoBackstep()
@@ -386,14 +388,14 @@ public class SigbinAI : MonoBehaviourPun
     {
         currentAction = ActionState.Backstep;
         isBackstepping = true;
-        float wind = backstepWindup;
+    float wind = slashWindup;
         float timeout = abilityHardTimeout;
         if (animator != null && HasTrigger(backstepTrigger)) animator.SetTrigger(backstepTrigger);
         var t = bb.Get<Transform>("target");
         if (t != null) FaceTarget(t);
         // dash backward
-        float dashTimer = 0.5f + (backstepMoveSpeed / 10f);
-        float dashSpeed = backstepMoveSpeed;
+    float dashTimer = 0.5f + (slashMoveSpeed / 10f);
+    float dashSpeed = slashMoveSpeed;
         while (dashTimer > 0f && (timeout -= Time.deltaTime) > 0f)
         {
             dashTimer -= Time.deltaTime;
@@ -406,9 +408,9 @@ public class SigbinAI : MonoBehaviourPun
             yield return null;
         }
         // attack after dash
-        if (t != null && Vector3.Distance(transform.position, t.position) <= backstepRange + 0.6f)
+        if (t != null && Vector3.Distance(transform.position, t.position) <= slashRange + 0.6f)
         {
-            DamageRelay.ApplyToPlayer(t.gameObject, backstepDamage);
+            DamageRelay.ApplyToPlayer(t.gameObject, slashDamage);
         }
         isBackstepping = false;
         float rec = Mathf.Max(0.1f, attackMoveLock);
@@ -592,9 +594,20 @@ public class SigbinAI : MonoBehaviourPun
     {
         if (isDead) return;
         isDead = true;
+        if (activeAbility != null)
+        {
+            try { StopCoroutine(activeAbility); } catch { }
+            activeAbility = null;
+        }
         if (animator != null)
         {
+            foreach (var p in animator.parameters)
+            {
+                if (p.type == AnimatorControllerParameterType.Trigger)
+                    animator.ResetTrigger(p.name);
+            }
             if (HasBool(isDeadBool)) animator.SetBool(isDeadBool, true);
+            if (HasBool(busyBool)) animator.SetBool(busyBool, false);
             if (HasTrigger(dieTrigger)) animator.SetTrigger(dieTrigger);
         }
         if (controller != null) controller.enabled = false;

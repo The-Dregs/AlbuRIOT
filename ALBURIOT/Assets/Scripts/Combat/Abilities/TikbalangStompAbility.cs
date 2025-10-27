@@ -12,7 +12,7 @@ namespace AlbuRIOT.Abilities
         [Header("fx (optional)")] public GameObject stompVfxPrefab; public AudioClip stompSfx;
         [Header("animation")] public string stompTrigger = "Stomp";
 
-        public override bool Execute(GameObject user, PlayerAbilityController controller)
+    public override bool Execute(GameObject user)
         {
             if (user == null) return false;
             // only local player triggers logic; damage relayed per enemy implementation
@@ -20,14 +20,7 @@ namespace AlbuRIOT.Abilities
             if (PhotonNetwork.InRoom && pv != null && !pv.IsMine) return false;
 
             // trigger stomp animation across network
-            if (controller != null)
-            {
-                string trig = stompTrigger;
-                if (!string.IsNullOrEmpty(controller.slot1AnimTriggerOverride))
-                    trig = controller.slot1AnimTriggerOverride;
-                if (!string.IsNullOrEmpty(trig))
-                    controller.PlayAbilityAnimation(trig);
-            }
+            // animation logic now handled by new system (PowerStealManager/PlayerSkillSlots)
 
             // do AOE overlap for enemies
             Vector3 center = user.transform.position;

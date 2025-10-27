@@ -66,6 +66,7 @@ public class ThirdPersonCameraOrbit : MonoBehaviour
 		float mouseX = Input.GetAxis("Mouse X") * mouseSensitivity * Time.deltaTime;
 		float mouseY = Input.GetAxis("Mouse Y") * mouseSensitivity * Time.deltaTime;
 
+		// block ALL camera rotation input (mouse, WASD, etc) when rotationLocked is true
 		if (!rotationLocked)
 		{
 			if (rightMouseHeld)

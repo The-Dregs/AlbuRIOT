@@ -2,6 +2,7 @@ using UnityEngine;
 using Photon.Pun;
 using TMPro;
 using UnityEngine.UI;
+using AlbuRIOT.AI.BehaviorTree;
 
 public class MinokawaFragmentAI : MonoBehaviourPun
 {
@@ -42,6 +43,7 @@ public class MinokawaFragmentAI : MonoBehaviourPun
     public string hitTrigger = "Hit";
     public string dieTrigger = "Die";
     public string isDeadBool = "IsDead";
+    public string busyBool = "Busy";
 
     [Header("behavior")]
     public bool enablePatrol = true;
@@ -592,9 +594,20 @@ public class MinokawaFragmentAI : MonoBehaviourPun
     {
         if (isDead) return;
         isDead = true;
+        if (activeAbility != null)
+        {
+            try { StopCoroutine(activeAbility); } catch { }
+            activeAbility = null;
+        }
         if (animator != null)
         {
+            foreach (var p in animator.parameters)
+            {
+                if (p.type == AnimatorControllerParameterType.Trigger)
+                    animator.ResetTrigger(p.name);
+            }
             if (HasBool(isDeadBool)) animator.SetBool(isDeadBool, true);
+            if (HasBool(busyBool)) animator.SetBool(busyBool, false);
             if (HasTrigger(dieTrigger)) animator.SetTrigger(dieTrigger);
         }
         if (controller != null) controller.enabled = false;

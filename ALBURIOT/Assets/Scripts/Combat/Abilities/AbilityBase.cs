@@ -18,7 +18,7 @@ namespace AlbuRIOT.Abilities
         public bool IsReady => Time.time >= lastUseTime + cooldown;
 
         // called by controller when player activates the slot
-        public abstract bool Execute(GameObject user, PlayerAbilityController controller);
+    public abstract bool Execute(GameObject user);
 
         // helper for cooldown start
         protected void MarkUsed()

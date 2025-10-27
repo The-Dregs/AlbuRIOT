@@ -1,5 +1,6 @@
 using UnityEngine;
 using Photon.Pun;
+using AlbuRIOT.AI.BehaviorTree;
 using TMPro;
 using UnityEngine.UI;
 
@@ -43,6 +44,7 @@ public class TiyanakAI : MonoBehaviourPun
     public string hitTrigger = "Hit";
     public string dieTrigger = "Die";
     public string isDeadBool = "IsDead";
+    public string busyBool = "Busy";
 
     [Header("behavior")]
     public bool enablePatrol = true;
@@ -94,7 +96,7 @@ public class TiyanakAI : MonoBehaviourPun
 
     // cooldown helpers
     public float BasicCooldownRemaining => Mathf.Max(0f, basicCooldown - (Time.time - lastBasicTime));
-    public float LungeCooldownRemaining => Mathf.Max(0f, lungeCooldown - (Time.time - lastLungeTime));
+    public float LungeCooldownRemaining => Mathf.Max(0f, biteCooldown - (Time.time - lastLungeTime));
     public float WailCooldownRemaining => Mathf.Max(0f, wailCooldown - (Time.time - lastWailTime));
 
     private void Awake()
@@ -365,11 +367,11 @@ public class TiyanakAI : MonoBehaviourPun
         if (IsBusy) return false;
         if (postSpecialTimer > 0f) return false;
         if (isLunging) return false;
-        if (Time.time - lastLungeTime < lungeCooldown) return false;
+    if (Time.time - lastLungeTime < biteCooldown) return false;
         var t = bb.Get<Transform>("target");
         if (t == null) return false;
-        float d = Vector3.Distance(transform.position, t.position);
-        return d <= lungeRange + 2f;
+    float d = Vector3.Distance(transform.position, t.position);
+    return d <= biteRange + 2f;
     }
 
     private NodeState DoLunge()
@@ -385,14 +387,14 @@ public class TiyanakAI : MonoBehaviourPun
     {
         currentAction = ActionState.Lunge;
         isLunging = true;
-        float wind = lungeWindup;
+    float wind = biteWindup;
         float timeout = abilityHardTimeout;
         if (animator != null && HasTrigger(lungeTrigger)) animator.SetTrigger(lungeTrigger);
         var t = bb.Get<Transform>("target");
         if (t != null) FaceTarget(t);
         // leap
-        float leapTimer = 0.5f + (lungeMoveSpeed / 10f);
-        float leapSpeed = lungeMoveSpeed;
+    float leapTimer = 0.5f + (biteMoveSpeed / 10f);
+    float leapSpeed = biteMoveSpeed;
         while (leapTimer > 0f && (timeout -= Time.deltaTime) > 0f)
         {
             leapTimer -= Time.deltaTime;
@@ -405,9 +407,9 @@ public class TiyanakAI : MonoBehaviourPun
             yield return null;
         }
         // attack after leap
-        if (t != null && Vector3.Distance(transform.position, t.position) <= lungeRange + 0.6f)
+        if (t != null && Vector3.Distance(transform.position, t.position) <= biteRange + 0.6f)
         {
-            DamageRelay.ApplyToPlayer(t.gameObject, lungeDamage);
+            DamageRelay.ApplyToPlayer(t.gameObject, biteDamage);
         }
         isLunging = false;
         float rec = Mathf.Max(0.1f, attackMoveLock);
@@ -596,9 +598,20 @@ public class TiyanakAI : MonoBehaviourPun
     {
         if (isDead) return;
         isDead = true;
+        if (activeAbility != null)
+        {
+            try { StopCoroutine(activeAbility); } catch { }
+            activeAbility = null;
+        }
         if (animator != null)
         {
+            foreach (var p in animator.parameters)
+            {
+                if (p.type == AnimatorControllerParameterType.Trigger)
+                    animator.ResetTrigger(p.name);
+            }
             if (HasBool(isDeadBool)) animator.SetBool(isDeadBool, true);
+            if (HasBool(busyBool)) animator.SetBool(busyBool, false);
             if (HasTrigger(dieTrigger)) animator.SetTrigger(dieTrigger);
         }
         if (controller != null) controller.enabled = false;

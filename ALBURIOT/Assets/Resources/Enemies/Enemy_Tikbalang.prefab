@@ -407,15 +407,15 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 9bd547d68af568941b91353ce503628c, type: 3}
       propertyPath: m_LocalPosition.x
-      value: 0
+      value: 4.53
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 9bd547d68af568941b91353ce503628c, type: 3}
       propertyPath: m_LocalPosition.y
-      value: 1.06
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 9bd547d68af568941b91353ce503628c, type: 3}
       propertyPath: m_LocalPosition.z
-      value: -36.2
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 9bd547d68af568941b91353ce503628c, type: 3}
       propertyPath: m_LocalRotation.w
@@ -574,6 +574,10 @@ PrefabInstance:
       value: 8
       objectReference: {fileID: 0}
     - target: {fileID: 919132149155446097, guid: 9bd547d68af568941b91353ce503628c, type: 3}
+      propertyPath: m_IsActive
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 919132149155446097, guid: 9bd547d68af568941b91353ce503628c, type: 3}
       propertyPath: m_TagString
       value: Enemy
       objectReference: {fileID: 0}
@@ -663,7 +667,7 @@ MonoBehaviour:
   chaseSpeed: 5
   attackMoveLock: 0.5
   orbitWhenBasicOnCooldown: 1
-  orbitSpeedMultiplier: 0.5
+  orbitSpeedMultiplier: 0.4
   animator: {fileID: 8336374754291112822}
   speedParam: Speed
   attackTrigger: Attack

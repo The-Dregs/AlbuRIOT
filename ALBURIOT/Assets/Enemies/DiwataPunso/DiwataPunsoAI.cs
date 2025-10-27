@@ -1,4 +1,5 @@
 using UnityEngine;
+using AlbuRIOT.AI.BehaviorTree;
 using Photon.Pun;
 using TMPro;
 using UnityEngine.UI;
@@ -44,6 +45,7 @@ public class DiwataPunsoAI : MonoBehaviourPun
     public string hitTrigger = "Hit";
     public string dieTrigger = "Die";
     public string isDeadBool = "IsDead";
+    public string busyBool = "Busy";
 
     [Header("behavior")]
     public bool enablePatrol = true;
@@ -407,10 +409,8 @@ public class DiwataPunsoAI : MonoBehaviourPun
             {
                 DamageRelay.ApplyToPlayer(ps.gameObject, rootsDamage);
                 // apply root effect (pseudo-code, replace with your root logic)
-                if (ps.TryGetComponent<PlayerMovement>(out var pm))
-                {
-                    pm.ApplyRoot(rootsRootDuration);
-                }
+                // apply root effect (pseudo-code, replace with your root logic)
+                // Example: ps.ApplyRoot(rootsRootDuration); // implement this in PlayerStats if needed
             }
         }
         isRooting = false;
@@ -474,14 +474,9 @@ public class DiwataPunsoAI : MonoBehaviourPun
             if (rb != null)
             {
                 Vector3 dir = (t.position - transform.position).normalized;
-                rb.velocity = dir * boltProjectileSpeed;
+                rb.linearVelocity = dir * boltProjectileSpeed; // Unity 2023+ compatibility
             }
-            var proj = go.GetComponent<NatureBoltProjectile>();
-            if (proj != null)
-            {
-                proj.damage = boltDamage;
-                proj.owner = this;
-            }
+            // TODO: assign damage/owner to projectile if NatureBoltProjectile type exists
         }
         isBolting = false;
         float rec = Mathf.Max(0.1f, attackMoveLock);
@@ -606,9 +601,20 @@ public class DiwataPunsoAI : MonoBehaviourPun
     {
         if (isDead) return;
         isDead = true;
+        if (activeAbility != null)
+        {
+            try { StopCoroutine(activeAbility); } catch { }
+            activeAbility = null;
+        }
         if (animator != null)
         {
+            foreach (var p in animator.parameters)
+            {
+                if (p.type == AnimatorControllerParameterType.Trigger)
+                    animator.ResetTrigger(p.name);
+            }
             if (HasBool(isDeadBool)) animator.SetBool(isDeadBool, true);
+            if (HasBool(busyBool)) animator.SetBool(busyBool, false);
             if (HasTrigger(dieTrigger)) animator.SetTrigger(dieTrigger);
         }
         if (controller != null) controller.enabled = false;

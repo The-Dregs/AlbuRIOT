@@ -24,7 +24,6 @@ public class AlbuRIOTIntegrationManager : MonoBehaviourPun
     [Header("Player Systems")]
     public PlayerStats playerStats;
     public Inventory inventory;
-    public PlayerAbilityController abilityController;
     
     [Header("Integration Settings")]
     public bool autoFindComponents = true;
@@ -102,8 +101,6 @@ public class AlbuRIOTIntegrationManager : MonoBehaviourPun
             playerStats = FindFirstObjectByType<PlayerStats>();
         if (inventory == null)
             inventory = FindFirstObjectByType<Inventory>();
-        if (abilityController == null)
-            abilityController = FindFirstObjectByType<PlayerAbilityController>();
     }
     
     private void InitializeSystems()
@@ -170,8 +167,6 @@ public class AlbuRIOTIntegrationManager : MonoBehaviourPun
             {
                 if (inventory != null)
                     questManager.playerInventory = inventory;
-                if (abilityController != null)
-                    questManager.abilityController = abilityController;
                 if (shrineManager != null)
                     questManager.shrineManager = shrineManager;
             }
@@ -309,7 +304,6 @@ public class AlbuRIOTIntegrationManager : MonoBehaviourPun
         Debug.Log($"VFXManager: {(vfxManager != null ? "✓" : "✗")}");
         Debug.Log($"PlayerStats: {(playerStats != null ? "✓" : "✗")}");
         Debug.Log($"Inventory: {(inventory != null ? "✓" : "✗")}");
-        Debug.Log($"AbilityController: {(abilityController != null ? "✓" : "✗")}");
     }
     
     public void TestPowerSteal(string enemyName)

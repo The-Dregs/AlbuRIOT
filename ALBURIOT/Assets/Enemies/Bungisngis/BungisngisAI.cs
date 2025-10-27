@@ -23,6 +23,8 @@ public class BungisngisAI : MonoBehaviourPun, IEnemyDamageable
     public float laughRange = 7f;
     public float laughWindup = 0.5f;
     public float laughCooldown = 8f;
+        [Header("belly laugh: movement stop duration")]
+        [Tooltip("How long the player is stopped when hit by Belly Laugh")] public float laughStopDuration = 0.5f;
 
     [Header("special: ground pound")]
     public int poundDamage = 22;
@@ -30,6 +32,22 @@ public class BungisngisAI : MonoBehaviourPun, IEnemyDamageable
     public float poundRange = 6f;
     public float poundWindup = 0.45f;
     public float poundCooldown = 7f;
+    public GameObject bellyLaughProjectilePrefab;
+        [Header("ground pound: movement stop duration")]
+        [Tooltip("How long the player is stopped when hit by Ground Pound")] public float poundStopDuration = 0.7f;
+        [Header("ground pound: VFX")]
+        public GameObject groundPoundVFXPrefab;
+        [Tooltip("VFX spawn position offset")] public Vector3 groundPoundVFXOffset = new Vector3(0,0,0);
+    [Header("turning")]
+    [Tooltip("Degrees per second for smooth turning")] public float turnSpeed = 480f;
+    private void SmoothTurnTowards(Vector3 targetPos)
+    {
+        Vector3 direction = targetPos - transform.position;
+        direction.y = 0f;
+        if (direction.sqrMagnitude < 0.001f) return;
+        Quaternion targetRot = Quaternion.LookRotation(direction);
+        transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, turnSpeed * Time.deltaTime);
+    }
 
     [Header("movement: speed settings")]
     public float patrolSpeed = 2f;
@@ -285,8 +303,8 @@ public class BungisngisAI : MonoBehaviourPun, IEnemyDamageable
                 float speed = chaseSpeed * Mathf.Clamp(orbitSpeedMultiplier, 0.1f, 2f);
                 if (controller.enabled)
                     controller.SimpleMove(tangent * speed);
-                var lookOrbit = new Vector3(t.position.x, transform.position.y, t.position.z);
-                transform.LookAt(lookOrbit);
+            var lookOrbit = new Vector3(t.position.x, transform.position.y, t.position.z);
+            SmoothTurnTowards(lookOrbit);
                 currentState = "orbiting (basic cd)";
                 return NodeState.Running;
             }
@@ -295,8 +313,8 @@ public class BungisngisAI : MonoBehaviourPun, IEnemyDamageable
         dir.Normalize();
         if (controller.enabled)
             controller.SimpleMove(dir * chaseSpeed);
-        var look = new Vector3(t.position.x, transform.position.y, t.position.z);
-        transform.LookAt(look);
+    var look = new Vector3(t.position.x, transform.position.y, t.position.z);
+    SmoothTurnTowards(look);
         return NodeState.Running;
     }
 
@@ -401,19 +419,8 @@ public class BungisngisAI : MonoBehaviourPun, IEnemyDamageable
                 controller.SimpleMove(Vector3.zero);
             yield return null;
         }
-        // cone blast
-        var cols = Physics.OverlapSphere(transform.position, laughRange, LayerMask.GetMask("Player"));
-        foreach (var c in cols)
-        {
-            var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null)
-            {
-                Vector3 to = (ps.transform.position - transform.position); to.y = 0f;
-                float angle = Vector3.Angle(transform.forward, to);
-                if (angle <= laughConeAngle * 0.5f)
-                    DamageRelay.ApplyToPlayer(ps.gameObject, laughDamage);
-            }
-        }
+        // fire projectile forward
+        FireBellyLaughProjectile();
         isLaughing = false;
         float rec = Mathf.Max(0.1f, attackMoveLock);
         while (rec > 0f && (timeout -= Time.deltaTime) > 0f)
@@ -467,21 +474,28 @@ public class BungisngisAI : MonoBehaviourPun, IEnemyDamageable
                 controller.SimpleMove(Vector3.zero);
             yield return null;
         }
-        // forward shockwave (strip)
+        // ground pound: radius effect after windup
         var cols = Physics.OverlapSphere(transform.position, poundRange, LayerMask.GetMask("Player"));
         foreach (var c in cols)
         {
             var ps = c.GetComponentInParent<PlayerStats>();
             if (ps != null)
             {
-                Vector3 to = (ps.transform.position - transform.position); to.y = 0f;
-                float angle = Vector3.Angle(transform.forward, to);
-                float dist = to.magnitude;
-                // inside strip: angle < 30deg, distance < range, lateral offset < stripWidth/2
-                Vector3 lateral = Vector3.Cross(transform.forward, to.normalized) * dist;
-                if (Mathf.Abs(lateral.magnitude) < poundStripWidth * 0.5f && angle < 30f)
-                    DamageRelay.ApplyToPlayer(ps.gameObject, poundDamage);
+                DamageRelay.ApplyToPlayer(ps.gameObject, poundDamage);
             }
+        }
+        // spawn ground pound VFX
+        if (groundPoundVFXPrefab != null)
+        {
+            Vector3 vfxPos = transform.position + groundPoundVFXOffset;
+            var vfx = Instantiate(groundPoundVFXPrefab, vfxPos, transform.rotation);
+            vfx.transform.localScale *= 1.7f; // example: scale up by 1.5x, replace with inspector field if needed
+        }
+        // spawn ground pound VFX
+        if (groundPoundVFXPrefab != null)
+        {
+            Vector3 vfxPos = transform.position + groundPoundVFXOffset;
+            Instantiate(groundPoundVFXPrefab, vfxPos, transform.rotation);
         }
         isPounding = false;
         float rec = Mathf.Max(0.1f, attackMoveLock);
@@ -527,7 +541,7 @@ public class BungisngisAI : MonoBehaviourPun, IEnemyDamageable
             dir.Normalize();
             if (controller.enabled)
                 controller.SimpleMove(dir * patrolSpeed);
-            transform.LookAt(new Vector3(patrolTarget.x, transform.position.y, patrolTarget.z));
+            SmoothTurnTowards(new Vector3(patrolTarget.x, transform.position.y, patrolTarget.z));
             return NodeState.Running;
         }
         return NodeState.Success;
@@ -641,8 +655,8 @@ public class BungisngisAI : MonoBehaviourPun, IEnemyDamageable
     private void FaceTarget(Transform t)
     {
         if (t == null) return;
-        var look = new Vector3(t.position.x, transform.position.y, t.position.z);
-        transform.LookAt(look);
+    var look = new Vector3(t.position.x, transform.position.y, t.position.z);
+    SmoothTurnTowards(look);
     }
 
     private bool HasFloatParam(string param)
@@ -665,5 +679,27 @@ public class BungisngisAI : MonoBehaviourPun, IEnemyDamageable
         foreach (var p in animator.parameters)
             if (p.type == AnimatorControllerParameterType.Bool && p.name == param) return true;
         return false;
+    }
+
+    public float bellyLaughProjectileSpeed = 12f;
+    public float bellyLaughProjectileLifetime = 2f;
+    public int bellyLaughProjectileDamage = 15;
+    public Vector3 bellyLaughProjectileOffset = new Vector3(0, 1.2f, 0.5f);
+
+    private void FireBellyLaughProjectile()
+    {
+        if (bellyLaughProjectilePrefab == null) return;
+        Vector3 spawnPos = transform.position + transform.TransformDirection(bellyLaughProjectileOffset);
+        GameObject proj = Instantiate(bellyLaughProjectilePrefab, spawnPos, transform.rotation);
+        Rigidbody rb = proj.GetComponent<Rigidbody>();
+        if (rb != null)
+            rb.linearVelocity = transform.forward * bellyLaughProjectileSpeed;
+        BellyLaughProjectile blp = proj.GetComponent<BellyLaughProjectile>();
+        if (blp != null)
+        {
+            blp.damage = bellyLaughProjectileDamage;
+            blp.owner = this;
+        }
+        Destroy(proj, bellyLaughProjectileLifetime);
     }
 }

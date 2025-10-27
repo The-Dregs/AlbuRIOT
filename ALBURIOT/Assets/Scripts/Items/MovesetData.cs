@@ -3,6 +3,8 @@ using UnityEngine;
 [CreateAssetMenu(fileName = "New Moveset", menuName = "AlbuRIOT/Moveset Data")]
 public class MovesetData : ScriptableObject
 {
+    [Header("Enemy Reference")]
+    public Transform enemyTransform; // assign enemy transform in inspector for VFX spawn
     [Header("Moveset Information")]
     public string movesetName;
     [TextArea] public string description;

@@ -19,6 +19,10 @@ public class LocalInputLocker : MonoBehaviour
     [SerializeField] private ThirdPersonCameraOrbit cameraOrbit;
     // We keep camera following the player; we only lock rotation when requested.
 
+    // track other camera controller scripts (imported assets or examples) that may also respond to mouse input
+    private readonly string[] _otherCameraControllerNames = new[] { "CameraControl", "FlyCameraControl", "CameraController" };
+    private readonly System.Collections.Generic.List<MonoBehaviour> _disabledOtherCameraControllers = new System.Collections.Generic.List<MonoBehaviour>();
+
     private class LockRequest
     {
         public string owner;
@@ -151,6 +155,10 @@ public class LocalInputLocker : MonoBehaviour
             // Keep camera enabled to follow player; only lock rotation inputs
             cameraOrbit.enabled = true;
             cameraOrbit.SetRotationLocked(wantLockCamera);
+            // debug: report binding
+            Debug.Log($"[LocalInputLocker] cameraOrbit.SetRotationLocked({wantLockCamera}) -> {cameraOrbit.gameObject.name}");
+            // also attempt to disable any other camera controllers that might read mouse axes
+            UpdateOtherCameraControllersState(wantLockCamera);
         }
 
         // cursor handling only if any request wants unlock and global setting allows
@@ -169,6 +177,57 @@ public class LocalInputLocker : MonoBehaviour
         }
 
         _applied = any; // tracks that we have some lock active
+    }
+
+    // find and disable/enable other camera controller MonoBehaviours by name
+    private void UpdateOtherCameraControllersState(bool disable)
+    {
+        if (disable)
+        {
+            // discover potentially interfering camera controller components and disable them
+            var all = Object.FindObjectsByType<MonoBehaviour>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            foreach (var mb in all)
+            {
+                if (mb == null) continue;
+                if (mb is ThirdPersonCameraOrbit) continue; // skip our main orbit
+                var tname = mb.GetType().Name;
+                for (int i = 0; i < _otherCameraControllerNames.Length; i++)
+                {
+                    if (tname == _otherCameraControllerNames[i])
+                    {
+                        if (mb.enabled)
+                        {
+                            try
+                            {
+                                mb.enabled = false;
+                                _disabledOtherCameraControllers.Add(mb);
+                                Debug.Log($"[LocalInputLocker] disabled other camera controller: {tname} on {mb.gameObject.name}");
+                            }
+                            catch { }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        else
+        {
+            // re-enable ones we disabled earlier (best-effort)
+            for (int i = _disabledOtherCameraControllers.Count - 1; i >= 0; i--)
+            {
+                var mb = _disabledOtherCameraControllers[i];
+                if (mb != null)
+                {
+                    try
+                    {
+                        mb.enabled = true;
+                        Debug.Log($"[LocalInputLocker] re-enabled camera controller: {mb.GetType().Name} on {mb.gameObject.name}");
+                    }
+                    catch { }
+                }
+                _disabledOtherCameraControllers.RemoveAt(i);
+            }
+        }
     }
 
     // Sometimes Unity can leave the cursor visible after UI closes; call this to enforce gameplay lock.

@@ -397,7 +397,9 @@ public class TikbalangAI : MonoBehaviourPun, IEnemyDamageable
                     controller.SimpleMove(tangent * speed);
                 // keep facing the target while orbiting
                 var lookOrbit = new Vector3(t.position.x, transform.position.y, t.position.z);
-                transform.LookAt(lookOrbit);
+                float orbitRotSpeed = 720f * Time.deltaTime;
+                Quaternion orbitTargetRot = Quaternion.LookRotation(lookOrbit - transform.position);
+                transform.rotation = Quaternion.RotateTowards(transform.rotation, orbitTargetRot, orbitRotSpeed);
                 currentState = "orbiting (basic cd)";
                 return NodeState.Running;
             }
@@ -408,8 +410,10 @@ public class TikbalangAI : MonoBehaviourPun, IEnemyDamageable
         if (controller.enabled)
             controller.SimpleMove(dir * chaseSpeed);
         // rotate towards target
-        var look = new Vector3(t.position.x, transform.position.y, t.position.z);
-        transform.LookAt(look);
+    var look = new Vector3(t.position.x, transform.position.y, t.position.z);
+    float chaseRotSpeed = 720f * Time.deltaTime;
+    Quaternion chaseTargetRot = Quaternion.LookRotation(look - transform.position);
+    transform.rotation = Quaternion.RotateTowards(transform.rotation, chaseTargetRot, chaseRotSpeed);
         return NodeState.Running;
     }
 
@@ -557,7 +561,10 @@ public class TikbalangAI : MonoBehaviourPun, IEnemyDamageable
             dir.Normalize();
             if (controller.enabled)
                 controller.SimpleMove(dir * patrolSpeed);
-            transform.LookAt(new Vector3(patrolTarget.x, transform.position.y, patrolTarget.z));
+            var look = new Vector3(patrolTarget.x, transform.position.y, patrolTarget.z);
+            float patrolRotSpeed = 720f * Time.deltaTime;
+            Quaternion patrolTargetRot = Quaternion.LookRotation(look - transform.position);
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, patrolTargetRot, patrolRotSpeed);
             return NodeState.Running;
         }
         return NodeState.Success;
@@ -746,7 +753,9 @@ public class TikbalangAI : MonoBehaviourPun, IEnemyDamageable
         if (t != null)
         {
             var look = new Vector3(t.position.x, transform.position.y, t.position.z);
-            transform.LookAt(look);
+            float debugRotSpeed = 720f * Time.deltaTime;
+            Quaternion debugTargetRot = Quaternion.LookRotation(look - transform.position);
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, debugTargetRot, debugRotSpeed);
         }
         // freeze in windup
         float wind = chargeWindup;
@@ -887,9 +896,11 @@ public class TikbalangAI : MonoBehaviourPun, IEnemyDamageable
     // rotate to face a target on the horizontal plane
     private void FaceTarget(Transform t)
     {
-        if (t == null) return;
-        var look = new Vector3(t.position.x, transform.position.y, t.position.z);
-        transform.LookAt(look);
+    if (t == null) return;
+    var look = new Vector3(t.position.x, transform.position.y, t.position.z);
+    float rotSpeed = 720f * Time.deltaTime;
+    Quaternion targetRot = Quaternion.LookRotation(look - transform.position);
+    transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotSpeed);
     }
 
     private System.Collections.IEnumerator HideHealthBarLater()

@@ -2,6 +2,7 @@ using UnityEngine;
 using Photon.Pun;
 using TMPro;
 using UnityEngine.UI;
+using AlbuRIOT.AI.BehaviorTree;
 
 public class PugotAI : MonoBehaviourPun
 {
@@ -44,6 +45,7 @@ public class PugotAI : MonoBehaviourPun
     public string hitTrigger = "Hit";
     public string dieTrigger = "Die";
     public string isDeadBool = "IsDead";
+    public string busyBool = "Busy";
 
     [Header("behavior")]
     public bool enablePatrol = true;
@@ -95,8 +97,8 @@ public class PugotAI : MonoBehaviourPun
 
     // cooldown helpers
     public float BasicCooldownRemaining => Mathf.Max(0f, basicCooldown - (Time.time - lastBasicTime));
-    public float HeadThrowCooldownRemaining => Mathf.Max(0f, headThrowCooldown - (Time.time - lastHeadThrowTime));
-    public float GraveStepCooldownRemaining => Mathf.Max(0f, graveStepCooldown - (Time.time - lastGraveStepTime));
+    public float HeadThrowCooldownRemaining => Mathf.Max(0f, throwCooldown - (Time.time - lastHeadThrowTime));
+    public float GraveStepCooldownRemaining => Mathf.Max(0f, stepCooldown - (Time.time - lastGraveStepTime));
 
     private void Awake()
     {
@@ -366,11 +368,11 @@ public class PugotAI : MonoBehaviourPun
         if (IsBusy) return false;
         if (postSpecialTimer > 0f) return false;
         if (isThrowingHead) return false;
-        if (Time.time - lastHeadThrowTime < headThrowCooldown) return false;
+    if (Time.time - lastHeadThrowTime < throwCooldown) return false;
         var t = bb.Get<Transform>("target");
         if (t == null) return false;
-        float d = Vector3.Distance(transform.position, t.position);
-        return d <= headThrowRange + 8f;
+    float d = Vector3.Distance(transform.position, t.position);
+    return d <= throwRange + 8f;
     }
 
     private NodeState DoHeadThrow()
@@ -386,7 +388,7 @@ public class PugotAI : MonoBehaviourPun
     {
         currentAction = ActionState.HeadThrow;
         isThrowingHead = true;
-        float wind = headThrowWindup;
+    float wind = throwWindup;
         float timeout = abilityHardTimeout;
         if (animator != null && HasTrigger(headThrowTrigger)) animator.SetTrigger(headThrowTrigger);
         var t = bb.Get<Transform>("target");
@@ -410,7 +412,7 @@ public class PugotAI : MonoBehaviourPun
             {
                 var ps = hit.collider.GetComponentInParent<PlayerStats>();
                 if (ps != null)
-                    DamageRelay.ApplyToPlayer(ps.gameObject, headThrowDamage);
+                    DamageRelay.ApplyToPlayer(ps.gameObject, throwDamage);
             }
         }
         isThrowingHead = false;
@@ -434,11 +436,11 @@ public class PugotAI : MonoBehaviourPun
         if (IsBusy) return false;
         if (postSpecialTimer > 0f) return false;
         if (isGraveStepping) return false;
-        if (Time.time - lastGraveStepTime < graveStepCooldown) return false;
+    if (Time.time - lastGraveStepTime < stepCooldown) return false;
         var t = bb.Get<Transform>("target");
         if (t == null) return false;
-        float d = Vector3.Distance(transform.position, t.position);
-        return d <= graveStepRange + 2f;
+    float d = Vector3.Distance(transform.position, t.position);
+    return d <= stepRange + 2f;
     }
 
     private NodeState DoGraveStep()
@@ -454,7 +456,7 @@ public class PugotAI : MonoBehaviourPun
     {
         currentAction = ActionState.GraveStep;
         isGraveStepping = true;
-        float wind = graveStepWindup;
+    float wind = stepWindup;
         float timeout = abilityHardTimeout;
         if (animator != null && HasTrigger(graveStepTrigger)) animator.SetTrigger(graveStepTrigger);
         var t = bb.Get<Transform>("target");
@@ -467,13 +469,13 @@ public class PugotAI : MonoBehaviourPun
             yield return null;
         }
         // area root/fear
-        var cols = Physics.OverlapSphere(transform.position, graveStepRadius, LayerMask.GetMask("Player"));
+    var cols = Physics.OverlapSphere(transform.position, stepRadius, LayerMask.GetMask("Player"));
         foreach (var c in cols)
         {
             var ps = c.GetComponentInParent<PlayerStats>();
             if (ps != null)
             {
-                DamageRelay.ApplyToPlayer(ps.gameObject, graveStepDamage);
+                DamageRelay.ApplyToPlayer(ps.gameObject, stepDamage);
                 // TODO: apply root/fear effect via PlayerStatusRelay
             }
         }
@@ -600,9 +602,20 @@ public class PugotAI : MonoBehaviourPun
     {
         if (isDead) return;
         isDead = true;
+        if (activeAbility != null)
+        {
+            try { StopCoroutine(activeAbility); } catch { }
+            activeAbility = null;
+        }
         if (animator != null)
         {
+            foreach (var p in animator.parameters)
+            {
+                if (p.type == AnimatorControllerParameterType.Trigger)
+                    animator.ResetTrigger(p.name);
+            }
             if (HasBool(isDeadBool)) animator.SetBool(isDeadBool, true);
+            if (HasBool(busyBool)) animator.SetBool(busyBool, false);
             if (HasTrigger(dieTrigger)) animator.SetTrigger(dieTrigger);
         }
         if (controller != null) controller.enabled = false;

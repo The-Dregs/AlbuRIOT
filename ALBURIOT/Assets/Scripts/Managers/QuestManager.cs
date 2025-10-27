@@ -109,8 +109,6 @@ public class QuestManager : MonoBehaviourPun
     [Header("Inventory Integration")]
     public Inventory playerInventory;
     
-    [Header("Ability Integration")]
-    public PlayerAbilityController abilityController;
 
     // quest events for ui or other systems
     public event Action<Quest> OnQuestStarted;
@@ -131,8 +129,6 @@ public class QuestManager : MonoBehaviourPun
         // Auto-find components if not assigned
         if (playerInventory == null)
             playerInventory = FindFirstObjectByType<Inventory>();
-        if (abilityController == null)
-            abilityController = FindFirstObjectByType<PlayerAbilityController>();
         if (shrineManager == null)
             shrineManager = FindFirstObjectByType<ShrineManager>();
     }
@@ -225,17 +221,7 @@ public class QuestManager : MonoBehaviourPun
         }
         
         // Give ability rewards
-        if (quest.rewardAbilities != null && abilityController != null)
-        {
-            foreach (var ability in quest.rewardAbilities)
-            {
-                if (ability != null)
-                {
-                    abilityController.AssignSlot1(ability);
-                    Debug.Log($"Quest reward ability: {ability.abilityName}");
-                }
-            }
-        }
+        // ability rewards now handled by PowerStealManager/PlayerSkillSlots system
     }
 
     public Quest GetCurrentQuest()
@@ -283,10 +269,7 @@ public class QuestManager : MonoBehaviourPun
                         {
                             playerInventory.AddItem(objective.rewardItem, objective.rewardQuantity);
                         }
-                        if (objective.rewardAbility != null && abilityController != null)
-                        {
-                            abilityController.AssignSlot1(objective.rewardAbility);
-                        }
+                        // ability rewards now handled by PowerStealManager/PlayerSkillSlots system
                     }
                 }
             }

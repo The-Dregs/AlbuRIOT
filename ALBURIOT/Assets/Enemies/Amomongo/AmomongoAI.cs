@@ -31,12 +31,37 @@ public class AmomongoAI : MonoBehaviourPun, IEnemyDamageable
     public float berserkWindup = 0.4f;
     public float berserkCooldown = 12f;
 
+    [Tooltip("If true, Amomongo will stop moving during Berserk Frenzy.")]
+    public bool stopDuringBerserk = true;
+
+    [Tooltip("How long (seconds) Amomongo will stop moving during Berserk Frenzy. Set to 0 for no stop.")]
+    public GameObject berserkVFXPrefab;
+    private GameObject activeBerserkVFX;
+    public float berserkStopDuration = 1.5f;
+
+        [Header("berserk active buff VFX")]
+        [Tooltip("Prefab for VFX shown while Berserk Frenzy buff is active.")]
+        public GameObject berserkActiveVFXPrefab;
+        private GameObject activeBerserkBuffVFX;
+        [Tooltip("Uniform scale for the Berserk Active VFX.")]
+        public float berserkActiveVFXScale = 1f;
+
+    [Header("berserk VFX properties")]
+    [Tooltip("Local position offset for the VFX (center of model).")]
+    public Vector3 berserkVFXOffset = Vector3.zero;
+    [Tooltip("Uniform scale for the VFX.")]
+    public float berserkVFXScale = 1f;
+
+
     [Header("movement: speed settings")]
     public float patrolSpeed = 2f;
     public float chaseSpeed = 4f;
     public float attackMoveLock = 0.35f;
     public bool orbitWhenBasicOnCooldown = true;
     [Range(0.1f, 1.5f)] public float orbitSpeedMultiplier = 0.7f;
+
+
+
 
     [Header("animation")]
     public Animator animator;
@@ -47,6 +72,7 @@ public class AmomongoAI : MonoBehaviourPun, IEnemyDamageable
     public string hitTrigger = "Hit";
     public string dieTrigger = "Die";
     public string isDeadBool = "IsDead";
+    // die animation trigger and dead flag
 
     [Header("behavior")]
     public bool enablePatrol = true;
@@ -71,7 +97,7 @@ public class AmomongoAI : MonoBehaviourPun, IEnemyDamageable
     private float berserkTimer;
     private Coroutine activeAbility;
     private bool IsBusy => activeAbility != null || attackLockTimer > 0f;
-    private enum ActionState { None, Basic, Slam, Berserk }
+    enum ActionState { None, Basic, Slam, Berserk }
     private ActionState currentAction = ActionState.None;
     public float abilityHardTimeout = 8f;
     [Header("global ability gating")]
@@ -169,6 +195,12 @@ public class AmomongoAI : MonoBehaviourPun, IEnemyDamageable
             {
                 isBerserk = false;
                 Debug.Log("[AmomongoAI] Berserk ended");
+                // destroy berserk active buff VFX when buff ends
+                if (activeBerserkBuffVFX != null)
+                {
+                    Destroy(activeBerserkBuffVFX);
+                    activeBerserkBuffVFX = null;
+                }
             }
         }
 
@@ -204,16 +236,16 @@ public class AmomongoAI : MonoBehaviourPun, IEnemyDamageable
 
     private void BuildTree()
     {
-        var updateTarget = new ActionNode(bb, ()=>{ currentState = "scanning target"; return UpdateTarget(); }, "update_target");
+        var updateTarget = new ActionNode(bb, () => { currentState = "scanning target"; return UpdateTarget(); }, "update_target");
         var hasTarget = new ConditionNode(bb, HasTarget, "has_target");
-        var moveToTarget = new ActionNode(bb, ()=>{ currentState = "chasing"; return MoveTowardsTarget(); }, "move_to_target");
+        var moveToTarget = new ActionNode(bb, () => { currentState = "chasing"; return MoveTowardsTarget(); }, "move_to_target");
         var targetInBasic = new ConditionNode(bb, TargetInBasicRange, "in_basic_range");
-        var attackBasic = new ActionNode(bb, ()=>{ currentState = "basic attack"; return AttackBasic(); }, "attack_basic");
-        var canSlam = new ConditionNode(bb, ()=>{ return CanDoSlam(); }, "can_slam");
-        var doSlam = new ActionNode(bb, ()=>{ currentState = "slam windup"; return DoSlam(); }, "do_slam");
-        var canBerserk = new ConditionNode(bb, ()=>{ return CanDoBerserk(); }, "can_berserk");
-        var doBerserk = new ActionNode(bb, ()=>{ currentState = "berserk windup"; return DoBerserk(); }, "do_berserk");
-        var patrol = new ActionNode(bb, ()=>{ currentState = enablePatrol ? "patrolling" : "idle"; return Patrol(); }, "patrol");
+        var attackBasic = new ActionNode(bb, () => { currentState = "basic attack"; return AttackBasic(); }, "attack_basic");
+        var canSlam = new ConditionNode(bb, () => { return CanDoSlam(); }, "can_slam");
+        var doSlam = new ActionNode(bb, () => { currentState = "slam windup"; return DoSlam(); }, "do_slam");
+        var canBerserk = new ConditionNode(bb, () => { return CanDoBerserk(); }, "can_berserk");
+        var doBerserk = new ActionNode(bb, () => { currentState = "berserk windup"; return DoBerserk(); }, "do_berserk");
+        var patrol = new ActionNode(bb, () => { currentState = enablePatrol ? "patrolling" : "idle"; return Patrol(); }, "patrol");
 
         var abilitySelector = new Selector(bb, "abilities_or_chase");
         abilitySelector.Add(
@@ -240,11 +272,11 @@ public class AmomongoAI : MonoBehaviourPun, IEnemyDamageable
     private NodeState UpdateTarget()
     {
         if (IsBusy) return NodeState.Success;
-    #if UNITY_2023_1_OR_NEWER
-    var players = Object.FindObjectsByType<PlayerStats>(FindObjectsSortMode.None);
-    #else
+#if UNITY_2023_1_OR_NEWER
+        var players = Object.FindObjectsByType<PlayerStats>(FindObjectsSortMode.None);
+#else
     var players = Object.FindObjectsOfType<PlayerStats>();
-    #endif
+#endif
         float best = float.MaxValue;
         Transform nearest = null;
         foreach (var p in players)
@@ -297,7 +329,9 @@ public class AmomongoAI : MonoBehaviourPun, IEnemyDamageable
                 if (controller.enabled)
                     controller.SimpleMove(tangent * speed);
                 var lookOrbit = new Vector3(t.position.x, transform.position.y, t.position.z);
-                transform.LookAt(lookOrbit);
+                float orbitRotSpeed = 720f * Time.deltaTime;
+                Quaternion orbitTargetRot = Quaternion.LookRotation(lookOrbit - transform.position);
+                transform.rotation = Quaternion.RotateTowards(transform.rotation, orbitTargetRot, orbitRotSpeed);
                 currentState = "orbiting (basic cd)";
                 return NodeState.Running;
             }
@@ -306,8 +340,10 @@ public class AmomongoAI : MonoBehaviourPun, IEnemyDamageable
         dir.Normalize();
         if (controller.enabled)
             controller.SimpleMove(dir * chaseSpeed);
-        var look = new Vector3(t.position.x, transform.position.y, t.position.z);
-        transform.LookAt(look);
+    var look = new Vector3(t.position.x, transform.position.y, t.position.z);
+    float rotSpeed = 720f * Time.deltaTime;
+    Quaternion targetRot = Quaternion.LookRotation(look - transform.position);
+    transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotSpeed);
         return NodeState.Running;
     }
 
@@ -326,7 +362,8 @@ public class AmomongoAI : MonoBehaviourPun, IEnemyDamageable
 
     private System.Collections.IEnumerator BasicRoutine(Transform target)
     {
-        currentAction = ActionState.Basic;
+    currentAction = ActionState.Basic;
+    if (animator != null && HasBool("Busy")) animator.SetBool("Busy", true);
         lastBasicTime = Time.time;
         if (animator != null && HasTrigger(attackTrigger)) animator.SetTrigger(attackTrigger);
         float wind = basicWindup;
@@ -370,9 +407,10 @@ public class AmomongoAI : MonoBehaviourPun, IEnemyDamageable
             if (target != null) FaceTarget(target);
             yield return null;
         }
-        currentAction = ActionState.None;
-        activeAbility = null;
-        currentState = "idle";
+    if (animator != null && HasBool("Busy")) animator.SetBool("Busy", false);
+    currentAction = ActionState.None;
+    activeAbility = null;
+    currentState = "idle";
     }
 
     private bool CanDoSlam()
@@ -397,7 +435,8 @@ public class AmomongoAI : MonoBehaviourPun, IEnemyDamageable
 
     private System.Collections.IEnumerator SlamRoutine()
     {
-        currentAction = ActionState.Slam;
+    currentAction = ActionState.Slam;
+    if (animator != null && HasBool("Busy")) animator.SetBool("Busy", true);
         float wind = slamWindup;
         float timeout = abilityHardTimeout;
         if (animator != null && HasTrigger(slamTrigger)) animator.SetTrigger(slamTrigger);
@@ -426,9 +465,10 @@ public class AmomongoAI : MonoBehaviourPun, IEnemyDamageable
             yield return null;
         }
         postSpecialTimer = postSpecialLock;
-        currentAction = ActionState.None;
-        activeAbility = null;
-        currentState = "idle";
+    if (animator != null && HasBool("Busy")) animator.SetBool("Busy", false);
+    currentAction = ActionState.None;
+    activeAbility = null;
+    currentState = "idle";
         yield break;
     }
 
@@ -452,13 +492,30 @@ public class AmomongoAI : MonoBehaviourPun, IEnemyDamageable
 
     private System.Collections.IEnumerator BerserkRoutine()
     {
-        currentAction = ActionState.Berserk;
+    currentAction = ActionState.Berserk;
+    if (animator != null && HasBool("Busy")) animator.SetBool("Busy", true);
         float wind = berserkWindup;
         float timeout = abilityHardTimeout;
         if (animator != null && HasTrigger(berserkTrigger)) animator.SetTrigger(berserkTrigger);
+        // spawn berserk VFX
+        if (berserkVFXPrefab != null)
+        {
+            if (activeBerserkVFX == null)
+            {
+                activeBerserkVFX = Instantiate(berserkVFXPrefab, transform);
+                activeBerserkVFX.transform.localPosition = berserkVFXOffset;
+                activeBerserkVFX.transform.localScale = Vector3.one * berserkVFXScale;
+            }
+        }
+        var target = bb != null ? bb.Get<Transform>("target") : null;
         while (wind > 0f && (timeout -= Time.deltaTime) > 0f)
         {
             wind -= Time.deltaTime;
+            if (target != null)
+            {
+                var look = new Vector3(target.position.x, transform.position.y, target.position.z);
+                transform.LookAt(look);
+            }
             if (controller != null && controller.enabled)
                 controller.SimpleMove(Vector3.zero);
             yield return null;
@@ -467,18 +524,37 @@ public class AmomongoAI : MonoBehaviourPun, IEnemyDamageable
         isBerserk = true;
         berserkTimer = berserkDuration;
         Debug.Log("[AmomongoAI] Berserk Frenzy activated");
-        float rec = 0.2f;
+        // spawn berserk active buff VFX (now that buff is active)
+        if (berserkActiveVFXPrefab != null && activeBerserkBuffVFX == null)
+        {
+            activeBerserkBuffVFX = Instantiate(berserkActiveVFXPrefab, transform);
+            activeBerserkBuffVFX.transform.localPosition = berserkVFXOffset;
+            activeBerserkBuffVFX.transform.localScale = Vector3.one * berserkActiveVFXScale;
+        }
+        float rec = stopDuringBerserk ? Mathf.Clamp(berserkStopDuration, 0f, berserkDuration) : 0f;
         while (rec > 0f && (timeout -= Time.deltaTime) > 0f)
         {
             rec -= Time.deltaTime;
+            if (target != null)
+            {
+                var look = new Vector3(target.position.x, transform.position.y, target.position.z);
+                transform.LookAt(look);
+            }
             if (controller != null && controller.enabled)
-                controller.SimpleMove(Vector3.zero);
+                controller.SimpleMove(Vector3.zero); // stop movement during berserk
             yield return null;
         }
         postSpecialTimer = postSpecialLock;
-        currentAction = ActionState.None;
-        activeAbility = null;
-        currentState = "idle";
+        // destroy berserk VFX
+        if (activeBerserkVFX != null)
+        {
+            Destroy(activeBerserkVFX);
+            activeBerserkVFX = null;
+        }
+    if (animator != null && HasBool("Busy")) animator.SetBool("Busy", false);
+    currentAction = ActionState.None;
+    activeAbility = null;
+    currentState = "idle";
         yield break;
     }
 
@@ -510,7 +586,10 @@ public class AmomongoAI : MonoBehaviourPun, IEnemyDamageable
             dir.Normalize();
             if (controller.enabled)
                 controller.SimpleMove(dir * patrolSpeed);
-            transform.LookAt(new Vector3(patrolTarget.x, transform.position.y, patrolTarget.z));
+            var look = new Vector3(patrolTarget.x, transform.position.y, patrolTarget.z);
+            float rotSpeed = 720f * Time.deltaTime;
+            Quaternion targetRot = Quaternion.LookRotation(look - transform.position);
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotSpeed);
             return NodeState.Running;
         }
         return NodeState.Success;
@@ -555,7 +634,7 @@ public class AmomongoAI : MonoBehaviourPun, IEnemyDamageable
             float cdBasic = BasicCooldownRemaining;
             float cdSlam = SlamCooldownRemaining;
             float cdBerserk = BerserkCooldownRemaining;
-            details = $"dist:{(dist>=0?dist.ToString("F1"):"-")} lock:{attackLockTimer:F1} berserk:{(isBerserk?"Y":"N")}\ncd B:{cdBasic:F1} S:{cdSlam:F1} F:{cdBerserk:F1}";
+            details = $"dist:{(dist >= 0 ? dist.ToString("F1") : "-")} lock:{attackLockTimer:F1} berserk:{(isBerserk ? "Y" : "N")}\ncd B:{cdBasic:F1} S:{cdSlam:F1} F:{cdBerserk:F1}";
         }
         var stateLine = IsBusy ? $"BUSY - {currentState}" : currentState;
         debugText.text = string.IsNullOrEmpty(details) ? stateLine : ($"{stateLine}\n{details}");
@@ -591,14 +670,60 @@ public class AmomongoAI : MonoBehaviourPun, IEnemyDamageable
         isDead = true;
         if (animator != null)
         {
+            // set simple Die trigger and IsDead flag
             if (HasBool(isDeadBool)) animator.SetBool(isDeadBool, true);
             if (HasTrigger(dieTrigger)) animator.SetTrigger(dieTrigger);
         }
         if (controller != null) controller.enabled = false;
         RefreshHealthBar(true);
+
+        // ensure any active berserk VFX is cleaned up immediately on death
+        if (activeBerserkVFX != null)
+        {
+            Destroy(activeBerserkVFX);
+            activeBerserkVFX = null;
+        }
+
+        // ensure any active berserk buff VFX is cleaned up immediately on death
+        if (activeBerserkBuffVFX != null)
+        {
+            Destroy(activeBerserkBuffVFX);
+            activeBerserkBuffVFX = null;
+        }
+
+        // power stealing: grant Berserk Frenzy to the player who killed Amomongo
+        var player = FindClosestPlayer();
+        if (player != null)
+        {
+            var stealManager = player.GetComponent<PowerStealManager>();
+            if (stealManager != null)
+            {
+                stealManager.StealPowerFromEnemy("Amomongo", transform.position);
+                Debug.Log("[AmomongoAI] PowerStealManager: Berserk Frenzy granted to player");
+            }
+        }
+
         Destroy(gameObject, 5f);
     }
 
+    // helper: find closest player to this enemy (for power stealing)
+    private GameObject FindClosestPlayer()
+    {
+        GameObject[] players = GameObject.FindGameObjectsWithTag("Player");
+        GameObject closest = null;
+        float minDist = float.MaxValue;
+        foreach (var p in players)
+        {
+            float dist = Vector3.Distance(transform.position, p.transform.position);
+            if (dist < minDist)
+            {
+                minDist = dist;
+                closest = p;
+            }
+        }
+        return closest;
+    }
+    // --- helper methods ---
     private void RefreshHealthBar(bool show)
     {
         if (healthBar != null)
@@ -649,4 +774,5 @@ public class AmomongoAI : MonoBehaviourPun, IEnemyDamageable
             if (p.type == AnimatorControllerParameterType.Bool && p.name == param) return true;
         return false;
     }
+    
 }

@@ -44,9 +44,9 @@ public class PauseMenuController : MonoBehaviour
                 if (!LocalUIManager.Ensure().TryOpen("PauseMenu")) return;
                 isOpen = true;
                 if (pausePanel != null) pausePanel.SetActive(true);
-                // full lock: movement, combat, and camera locked; cursor unlocked
+                // lock combat and camera, but allow movement; cursor unlocked
                 if (_inputLockToken == 0)
-                    _inputLockToken = LocalInputLocker.Ensure().Acquire("PauseMenu", lockMovement:true, lockCombat:true, lockCamera:true, cursorUnlock:true);
+                    _inputLockToken = LocalInputLocker.Ensure().Acquire("PauseMenu", lockMovement:false, lockCombat:true, lockCamera:true, cursorUnlock:true);
             }
             else
             {

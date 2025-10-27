@@ -37,26 +37,32 @@ public class QuestListUI : MonoBehaviour
         if (Input.GetKeyDown(toggleKey))
         {
             bool open = panel != null && !panel.activeSelf;
-                if (open)
+            var ui = LocalUIManager.Ensure();
+            if (open)
             {
-                if (!LocalUIManager.Ensure().TryOpen("QuestList")) return;
+                // enforce strict exclusivity: do not open if any other UI is open
+                if (ui.IsAnyOpen && !ui.IsOwner("QuestList")) {
+                    Debug.LogWarning("[questlist] cannot open: another UI is already open");
+                    return;
+                }
+                if (!ui.TryOpen("QuestList")) return;
                 if (panel != null) panel.SetActive(true);
                 Refresh();
-                    // partial lock: allow movement, lock combat and camera, unlock cursor
-                    if (_inputLockToken == 0)
-                        _inputLockToken = LocalInputLocker.Ensure().Acquire("QuestList", lockMovement:false, lockCombat:true, lockCamera:true, cursorUnlock:true);
+                // partial lock: allow movement, lock combat and camera, unlock cursor
+                if (_inputLockToken == 0)
+                    _inputLockToken = LocalInputLocker.Ensure().Acquire("QuestList", lockMovement:false, lockCombat:true, lockCamera:true, cursorUnlock:true);
             }
             else
             {
                 // avoid disabling ourselves if the panel is the same GameObject this script is on
                 if (panel != null && panel != this.gameObject) panel.SetActive(false);
                 if (LocalUIManager.Instance != null) LocalUIManager.Instance.Close("QuestList");
-                    if (_inputLockToken != 0)
-                    {
-                        LocalInputLocker.Ensure().Release(_inputLockToken);
-                        _inputLockToken = 0;
-                    }
-                    LocalInputLocker.Ensure().ForceGameplayCursor();
+                if (_inputLockToken != 0)
+                {
+                    LocalInputLocker.Ensure().Release(_inputLockToken);
+                    _inputLockToken = 0;
+                }
+                LocalInputLocker.Ensure().ForceGameplayCursor();
             }
         }
 

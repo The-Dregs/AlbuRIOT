@@ -2,6 +2,7 @@ using UnityEngine;
 using Photon.Pun;
 using TMPro;
 using UnityEngine.UI;
+using AlbuRIOT.AI.BehaviorTree;
 
 public class SarimanokAI : MonoBehaviourPun
 {
@@ -44,6 +45,7 @@ public class SarimanokAI : MonoBehaviourPun
     public string hitTrigger = "Hit";
     public string dieTrigger = "Die";
     public string isDeadBool = "IsDead";
+    public string busyBool = "Busy";
 
     [Header("behavior")]
     public bool enablePatrol = true;
@@ -95,8 +97,10 @@ public class SarimanokAI : MonoBehaviourPun
 
     // cooldown helpers
     public float BasicCooldownRemaining => Mathf.Max(0f, basicCooldown - (Time.time - lastBasicTime));
-    public float DespairCryCooldownRemaining => Mathf.Max(0f, despairCryCooldown - (Time.time - lastDespairCryTime));
-    public float BlazingFeathersCooldownRemaining => Mathf.Max(0f, blazingFeathersCooldown - (Time.time - lastBlazingFeathersTime));
+    public float DespairCryCooldownRemaining => Mathf.Max(0f, cryCooldown - (Time.time - lastDespairCryTime));
+    public float BlazingFeathersCooldownRemaining => Mathf.Max(0f, featherCooldown - (Time.time - lastBlazingFeathersTime));
+    [Header("Blazing Feathers Cone")]
+    public float featherConeAngle = 60f; // default cone angle for Blazing Feathers
 
     private void Awake()
     {
@@ -366,11 +370,11 @@ public class SarimanokAI : MonoBehaviourPun
         if (IsBusy) return false;
         if (postSpecialTimer > 0f) return false;
         if (isCrying) return false;
-        if (Time.time - lastDespairCryTime < despairCryCooldown) return false;
+    if (Time.time - lastDespairCryTime < cryCooldown) return false;
         var t = bb.Get<Transform>("target");
         if (t == null) return false;
-        float d = Vector3.Distance(transform.position, t.position);
-        return d <= despairCryRange + 2f;
+    float d = Vector3.Distance(transform.position, t.position);
+    return d <= cryRange + 2f;
     }
 
     private NodeState DoDespairCry()
@@ -386,7 +390,7 @@ public class SarimanokAI : MonoBehaviourPun
     {
         currentAction = ActionState.Cry;
         isCrying = true;
-        float wind = despairCryWindup;
+    float wind = cryWindup;
         float timeout = abilityHardTimeout;
         if (animator != null && HasTrigger(despairCryTrigger)) animator.SetTrigger(despairCryTrigger);
         var t = bb.Get<Transform>("target");
@@ -399,13 +403,13 @@ public class SarimanokAI : MonoBehaviourPun
             yield return null;
         }
         // AOE debuff/fear
-        var cols = Physics.OverlapSphere(transform.position, despairCryRadius, LayerMask.GetMask("Player"));
+    var cols = Physics.OverlapSphere(transform.position, cryRadius, LayerMask.GetMask("Player"));
         foreach (var c in cols)
         {
             var ps = c.GetComponentInParent<PlayerStats>();
             if (ps != null)
             {
-                DamageRelay.ApplyToPlayer(ps.gameObject, despairCryDamage);
+                DamageRelay.ApplyToPlayer(ps.gameObject, cryDamage);
                 // TODO: apply fear/debuff effect via PlayerStatusRelay
             }
         }
@@ -430,11 +434,11 @@ public class SarimanokAI : MonoBehaviourPun
         if (IsBusy) return false;
         if (postSpecialTimer > 0f) return false;
         if (isFeathering) return false;
-        if (Time.time - lastBlazingFeathersTime < blazingFeathersCooldown) return false;
+    if (Time.time - lastBlazingFeathersTime < featherCooldown) return false;
         var t = bb.Get<Transform>("target");
         if (t == null) return false;
-        float d = Vector3.Distance(transform.position, t.position);
-        return d <= blazingFeathersRange + 6f;
+    float d = Vector3.Distance(transform.position, t.position);
+    return d <= featherRange + 6f;
     }
 
     private NodeState DoBlazingFeathers()
@@ -450,7 +454,7 @@ public class SarimanokAI : MonoBehaviourPun
     {
         currentAction = ActionState.Feathers;
         isFeathering = true;
-        float wind = blazingFeathersWindup;
+    float wind = featherWindup;
         float timeout = abilityHardTimeout;
         if (animator != null && HasTrigger(blazingFeathersTrigger)) animator.SetTrigger(blazingFeathersTrigger);
         var t = bb.Get<Transform>("target");
@@ -467,8 +471,8 @@ public class SarimanokAI : MonoBehaviourPun
         {
             Vector3 start = transform.position + Vector3.up * 1.5f;
             Vector3 dir = (t.position - start).normalized;
-            float coneAngle = blazingFeathersConeAngle;
-            float coneRange = blazingFeathersRange;
+            float coneAngle = featherConeAngle;
+            float coneRange = featherRange;
             var players = FindAllPlayers();
             foreach (var ps in players)
             {
@@ -478,7 +482,7 @@ public class SarimanokAI : MonoBehaviourPun
                 float angle = Vector3.Angle(dir, toPlayer.normalized);
                 if (dist <= coneRange && angle <= coneAngle * 0.5f)
                 {
-                    DamageRelay.ApplyToPlayer(ps.gameObject, blazingFeathersDamage);
+                    DamageRelay.ApplyToPlayer(ps.gameObject, featherDamage);
                 }
             }
         }
@@ -605,9 +609,20 @@ public class SarimanokAI : MonoBehaviourPun
     {
         if (isDead) return;
         isDead = true;
+        if (activeAbility != null)
+        {
+            try { StopCoroutine(activeAbility); } catch { }
+            activeAbility = null;
+        }
         if (animator != null)
         {
+            foreach (var p in animator.parameters)
+            {
+                if (p.type == AnimatorControllerParameterType.Trigger)
+                    animator.ResetTrigger(p.name);
+            }
             if (HasBool(isDeadBool)) animator.SetBool(isDeadBool, true);
+            if (HasBool(busyBool)) animator.SetBool(busyBool, false);
             if (HasTrigger(dieTrigger)) animator.SetTrigger(dieTrigger);
         }
         if (controller != null) controller.enabled = false;

@@ -39,6 +39,14 @@ public class BerberokaAI : MonoBehaviourPun, IEnemyDamageable
     public bool orbitWhenBasicOnCooldown = true;
     [Range(0.1f, 1.5f)] public float orbitSpeedMultiplier = 0.7f;
 
+    [Header("move stop times (seconds)")]
+    [Tooltip("How long Berberoka stops after each moveset")]
+    public float stopTimeAfterBasic = 0.5f;
+    public float stopTimeAfterVortex = 1.0f;
+    public float stopTimeAfterCrash = 0.8f;
+    [Tooltip("How long Berberoka stays exhausted after moveset (animation)")]
+    public float exhaustedStopTime = 0.7f;
+
     [Header("animation")]
     public Animator animator;
     public string speedParam = "Speed";
@@ -48,6 +56,8 @@ public class BerberokaAI : MonoBehaviourPun, IEnemyDamageable
     public string hitTrigger = "Hit";
     public string dieTrigger = "Die";
     public string isDeadBool = "IsDead";
+    [Header("animation triggers")]
+    public string exhaustedTrigger = "Exhausted";
 
     [Header("behavior")]
     public bool enablePatrol = true;
@@ -59,6 +69,39 @@ public class BerberokaAI : MonoBehaviourPun, IEnemyDamageable
     public Slider healthBar;
     public float healthbarHideDelay = 3f;
     private Coroutine hbHideCo;
+
+    [Header("special: water vortex VFX")]
+    public GameObject vortexVFXPrefab;
+    public Vector3 vortexVFXOffset = new Vector3(0, 0, 0);
+    public Vector3 vortexVFXScale = Vector3.one;
+
+    [Header("special: flood crash VFX")]
+    public GameObject crashVFXPrefab;
+    public Vector3 crashVFXOffset = new Vector3(0, 0, 0);
+    public Vector3 crashVFXScale = Vector3.one;
+
+    [Header("special: flood crash projectile")]
+    [Tooltip("Prefab for the projectile shot forward during flood crash")]
+    public GameObject crashProjectilePrefab;
+    [Tooltip("Offset from Berberoka's position to spawn projectile")]
+    public Vector3 crashProjectileOffset = new Vector3(0, 0, 2f);
+    [Tooltip("Scale of the projectile prefab")]
+    public Vector3 crashProjectileScale = Vector3.one;
+    [Tooltip("Speed of the projectile (set in inspector)")]
+    public float crashProjectileSpeed = 12f;
+    [Tooltip("Lifetime of the projectile (set in inspector)")]
+    public float crashProjectileLifetime = 2f;
+
+    [Header("turning")]
+    [Tooltip("Degrees per second for smooth turning")] public float turnSpeed = 480f;
+    private void SmoothTurnTowards(Vector3 targetPos)
+    {
+        Vector3 direction = targetPos - transform.position;
+        direction.y = 0f;
+        if (direction.sqrMagnitude < 0.001f) return;
+        Quaternion targetRot = Quaternion.LookRotation(direction);
+        transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, turnSpeed * Time.deltaTime);
+    }
 
     private CharacterController controller;
     private Vector3 spawnPoint;
@@ -287,7 +330,7 @@ public class BerberokaAI : MonoBehaviourPun, IEnemyDamageable
                 if (controller.enabled)
                     controller.SimpleMove(tangent * speed);
                 var lookOrbit = new Vector3(t.position.x, transform.position.y, t.position.z);
-                transform.LookAt(lookOrbit);
+                SmoothTurnTowards(lookOrbit);
                 currentState = "orbiting (basic cd)";
                 return NodeState.Running;
             }
@@ -297,7 +340,7 @@ public class BerberokaAI : MonoBehaviourPun, IEnemyDamageable
         if (controller.enabled)
             controller.SimpleMove(dir * chaseSpeed);
         var look = new Vector3(t.position.x, transform.position.y, t.position.z);
-        transform.LookAt(look);
+        SmoothTurnTowards(look);
         return NodeState.Running;
     }
 
@@ -321,12 +364,13 @@ public class BerberokaAI : MonoBehaviourPun, IEnemyDamageable
         if (animator != null && HasTrigger(attackTrigger)) animator.SetTrigger(attackTrigger);
         float wind = basicWindup;
         float timeout = abilityHardTimeout;
+        // stop movement during windup
         while (wind > 0f && (timeout -= Time.deltaTime) > 0f)
         {
             wind -= Time.deltaTime;
             if (controller != null && controller.enabled)
                 controller.SimpleMove(Vector3.zero);
-            if (target != null) FaceTarget(target);
+            if (target != null) SmoothTurnTowards(target.position);
             yield return null;
         }
         bool applied = false;
@@ -351,13 +395,26 @@ public class BerberokaAI : MonoBehaviourPun, IEnemyDamageable
                     DamageRelay.ApplyToPlayer(ps.gameObject, basicDamage);
             }
         }
-        float rec = Mathf.Max(0.1f, attackMoveLock);
-        while (rec > 0f && (timeout -= Time.deltaTime) > 0f)
+        // exhausted animation trigger
+        if (animator != null && HasTrigger(exhaustedTrigger)) animator.SetTrigger(exhaustedTrigger);
+        // exhausted stop time (inspector)
+        float exhausted = Mathf.Max(0.1f, exhaustedStopTime);
+        while (exhausted > 0f && (timeout -= Time.deltaTime) > 0f)
         {
-            rec -= Time.deltaTime;
+            exhausted -= Time.deltaTime;
             if (controller != null && controller.enabled)
                 controller.SimpleMove(Vector3.zero);
-            if (target != null) FaceTarget(target);
+            if (target != null) SmoothTurnTowards(target.position);
+            yield return null;
+        }
+        // stopping time after basic attack
+        float stop = Mathf.Max(0.1f, stopTimeAfterBasic);
+        while (stop > 0f && (timeout -= Time.deltaTime) > 0f)
+        {
+            stop -= Time.deltaTime;
+            if (controller != null && controller.enabled)
+                controller.SimpleMove(Vector3.zero);
+            if (target != null) SmoothTurnTowards(target.position);
             yield return null;
         }
         currentAction = ActionState.None;
@@ -393,12 +450,24 @@ public class BerberokaAI : MonoBehaviourPun, IEnemyDamageable
         float wind = vortexWindup;
         float timeout = abilityHardTimeout;
         if (animator != null && HasTrigger(vortexTrigger)) animator.SetTrigger(vortexTrigger);
+        // stop movement during windup
         while (wind > 0f && (timeout -= Time.deltaTime) > 0f)
         {
             wind -= Time.deltaTime;
             if (controller != null && controller.enabled)
                 controller.SimpleMove(Vector3.zero);
+            if (targetPlayer != null) SmoothTurnTowards(targetPlayer.position);
             yield return null;
+        }
+        // spawn vortex VFX exactly at Berberoka's position, upright
+        if (vortexVFXPrefab != null)
+        {
+            // rotate -90 on X so prefab's Y axis points up in world space
+            var vfx = Instantiate(vortexVFXPrefab, transform.position, Quaternion.Euler(-90, 0, 0));
+            vfx.transform.SetParent(transform, false); // parent to Berberoka
+            vfx.transform.localPosition = vortexVFXOffset; // use inspector offset
+            vfx.transform.localScale = vortexVFXScale;
+            Destroy(vfx, vortexDuration + 0.5f);
         }
         // DoT around self
         float vortexTimer = vortexDuration;
@@ -421,12 +490,26 @@ public class BerberokaAI : MonoBehaviourPun, IEnemyDamageable
             yield return null;
         }
         isVortexing = false;
-        float rec = Mathf.Max(0.1f, attackMoveLock);
-        while (rec > 0f && (timeout -= Time.deltaTime) > 0f)
+        // exhausted animation trigger
+        if (animator != null && HasTrigger(exhaustedTrigger)) animator.SetTrigger(exhaustedTrigger);
+        // exhausted stop time (inspector)
+        float exhausted = Mathf.Max(0.1f, exhaustedStopTime);
+        while (exhausted > 0f && (timeout -= Time.deltaTime) > 0f)
         {
-            rec -= Time.deltaTime;
+            exhausted -= Time.deltaTime;
             if (controller != null && controller.enabled)
                 controller.SimpleMove(Vector3.zero);
+            if (targetPlayer != null) SmoothTurnTowards(targetPlayer.position);
+            yield return null;
+        }
+        // stopping time after vortex
+        float stop = Mathf.Max(0.1f, stopTimeAfterVortex);
+        while (stop > 0f && (timeout -= Time.deltaTime) > 0f)
+        {
+            stop -= Time.deltaTime;
+            if (controller != null && controller.enabled)
+                controller.SimpleMove(Vector3.zero);
+            if (targetPlayer != null) SmoothTurnTowards(targetPlayer.position);
             yield return null;
         }
         postSpecialTimer = postSpecialLock;
@@ -466,12 +549,37 @@ public class BerberokaAI : MonoBehaviourPun, IEnemyDamageable
         if (animator != null && HasTrigger(crashTrigger)) animator.SetTrigger(crashTrigger);
         var t = bb.Get<Transform>("target");
         if (t != null) FaceTarget(t);
+        // stop movement during windup
         while (wind > 0f && (timeout -= Time.deltaTime) > 0f)
         {
             wind -= Time.deltaTime;
             if (controller != null && controller.enabled)
                 controller.SimpleMove(Vector3.zero);
+            if (targetPlayer != null) SmoothTurnTowards(targetPlayer.position);
             yield return null;
+        }
+        // spawn crash VFX
+        if (crashVFXPrefab != null)
+        {
+            var vfx = Instantiate(crashVFXPrefab, transform.position + crashVFXOffset, transform.rotation);
+            vfx.transform.localScale = crashVFXScale;
+            Destroy(vfx, 1.5f);
+        }
+        // shoot crash projectile forward
+        if (crashProjectilePrefab != null)
+        {
+            var projPos = transform.position + transform.rotation * crashProjectileOffset;
+            var proj = Instantiate(crashProjectilePrefab, projPos, transform.rotation);
+            proj.transform.localScale = crashProjectileScale;
+            var projectile = proj.GetComponent<EnemyProjectile>();
+            if (projectile != null)
+            {
+                projectile.damage = crashDamage;
+                projectile.speed = crashProjectileSpeed;
+                projectile.lifetime = crashProjectileLifetime;
+                projectile.owner = this.gameObject;
+            }
+            Destroy(proj, crashProjectileLifetime + 0.5f);
         }
         // cone slam
         var cols = Physics.OverlapSphere(transform.position, crashRange, LayerMask.GetMask("Player"));
@@ -487,12 +595,26 @@ public class BerberokaAI : MonoBehaviourPun, IEnemyDamageable
             }
         }
         isCrashing = false;
-        float rec = Mathf.Max(0.1f, attackMoveLock);
-        while (rec > 0f && (timeout -= Time.deltaTime) > 0f)
+        // exhausted animation trigger
+        if (animator != null && HasTrigger(exhaustedTrigger)) animator.SetTrigger(exhaustedTrigger);
+        // exhausted stop time (inspector)
+        float exhausted = Mathf.Max(0.1f, exhaustedStopTime);
+        while (exhausted > 0f && (timeout -= Time.deltaTime) > 0f)
         {
-            rec -= Time.deltaTime;
+            exhausted -= Time.deltaTime;
             if (controller != null && controller.enabled)
                 controller.SimpleMove(Vector3.zero);
+            if (targetPlayer != null) SmoothTurnTowards(targetPlayer.position);
+            yield return null;
+        }
+        // stopping time after crash
+        float stop = Mathf.Max(0.1f, stopTimeAfterCrash);
+        while (stop > 0f && (timeout -= Time.deltaTime) > 0f)
+        {
+            stop -= Time.deltaTime;
+            if (controller != null && controller.enabled)
+                controller.SimpleMove(Vector3.zero);
+            if (targetPlayer != null) SmoothTurnTowards(targetPlayer.position);
             yield return null;
         }
         postSpecialTimer = postSpecialLock;
@@ -645,7 +767,7 @@ public class BerberokaAI : MonoBehaviourPun, IEnemyDamageable
     {
         if (t == null) return;
         var look = new Vector3(t.position.x, transform.position.y, t.position.z);
-        transform.LookAt(look);
+        SmoothTurnTowards(look);
     }
 
     private bool HasFloatParam(string param)

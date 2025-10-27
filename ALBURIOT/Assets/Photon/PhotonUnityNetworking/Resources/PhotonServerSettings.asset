@@ -87,6 +87,8 @@ MonoBehaviour:
   - RPC_OnDeathFX
   - RPC_PlayTrigger
   - RPC_EnemyTakeDamage
+  - PlayPowerStealVFX
+  - RPC_PlayUniformPowerStealVFX
   DisableAutoOpenWizard: 1
   ShowSettings: 1
   DevRegionSetOnce: 1

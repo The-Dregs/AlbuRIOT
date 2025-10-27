@@ -63,6 +63,24 @@ public class NetworkManager : MonoBehaviourPunCallbacks
     
     void Start()
     {
+        // log Photon Server Settings to help debug build/connect issues (AppId presence, master-server usage)
+        try
+        {
+            var ss = Photon.Pun.PhotonNetwork.PhotonServerSettings;
+            if (ss != null && ss.AppSettings != null)
+            {
+                Debug.Log($"NetworkManager: PhotonServerSettings found. AppIdRealtime: '{ss.AppSettings.AppIdRealtime}' IsMasterServerAddress: {ss.AppSettings.IsMasterServerAddress}");
+            }
+            else
+            {
+                Debug.LogWarning("NetworkManager: PhotonServerSettings or AppSettings is null. Check PhotonServerSettings asset in Resources/PhotonServerSettings.asset");
+            }
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogWarning("NetworkManager: Exception while reading PhotonServerSettings: " + ex.Message);
+        }
+
         // dev-friendly default: offline unless explicitly connecting
         if (!autoConnectOnStart)
         {

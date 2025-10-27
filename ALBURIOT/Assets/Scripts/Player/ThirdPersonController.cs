@@ -51,6 +51,9 @@ public class ThirdPersonController : MonoBehaviourPun
 	private bool canMove = true;
 	private bool canControl = true;
 
+	// when true, prevent the character from rotating to face movement
+	// REMOVE rotationLocked and SetRotationLocked; always allow facing movement direction
+
 	public void SetCanMove(bool value)
 	{
 		canMove = value;
@@ -99,6 +102,8 @@ public class ThirdPersonController : MonoBehaviourPun
 		// always tick roll timers and stamina regen block regardless of movement gating
 		TickRollAndStaminaRegenBlock();
 
+	// block movement input if PauseMenu is open
+	bool blockMovementInput = LocalUIManager.Instance != null && LocalUIManager.Instance.IsOwner("PauseMenu");
 	if (canControl)
 	{
 		if (canMove)
@@ -159,31 +164,18 @@ public class ThirdPersonController : MonoBehaviourPun
 		float v = Input.GetAxisRaw("Vertical");
 
 
-		// movement direction depends on freelook state
+		// movement is always relative to camera, not player facing
 		Vector3 move = Vector3.zero;
 		var cameraOrbit = cameraPivot.GetComponent<ThirdPersonCameraOrbit>();
 		if (cameraOrbit != null)
 		{
-			if (Input.GetMouseButton(1)) // freelook: move relative to player
-			{
-				Vector3 playerForward = transform.forward;
-				playerForward.y = 0f;
-				playerForward.Normalize();
-				Vector3 playerRight = transform.right;
-				playerRight.y = 0f;
-				playerRight.Normalize();
-				move = playerForward * v + playerRight * h;
-			}
-			else // normal: move relative to camera
-			{
-				Vector3 camForward = cameraPivot.forward;
-				camForward.y = 0f;
-				camForward.Normalize();
-				Vector3 camRight = cameraPivot.right;
-				camRight.y = 0f;
-				camRight.Normalize();
-				move = camForward * v + camRight * h;
-			}
+			Vector3 camForward = cameraPivot.forward;
+			camForward.y = 0f;
+			camForward.Normalize();
+			Vector3 camRight = cameraPivot.right;
+			camRight.y = 0f;
+			camRight.Normalize();
+			move = camForward * v + camRight * h;
 		}
 		if (move.sqrMagnitude > 1f) move.Normalize();
 
@@ -208,7 +200,7 @@ public class ThirdPersonController : MonoBehaviourPun
 					isRolling = true;
 					rollTimer = rollDuration;
 					rollDirection = move.normalized;
-					// face roll direction instantly
+					// face roll direction instantly (only if rotation not locked)
 					if (rollDirection.sqrMagnitude > 0.001f)
 					{
 						Quaternion lookRot = Quaternion.LookRotation(rollDirection, Vector3.up);
@@ -229,7 +221,7 @@ public class ThirdPersonController : MonoBehaviourPun
 		}
 
 		// face movement direction during walk/run (not while rolling)
-		if (!isRolling && move.sqrMagnitude > 0.0001f)
+	if (!isRolling && move.sqrMagnitude > 0.0001f)
 		{
 			Quaternion targetRot = Quaternion.LookRotation(move.normalized, Vector3.up);
 			transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, rotationSpeed * Time.deltaTime);

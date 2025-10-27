@@ -49,6 +49,7 @@ public class AswangAI : MonoBehaviourPun, IEnemyDamageable
     public string hitTrigger = "Hit";
     public string dieTrigger = "Die";
     public string isDeadBool = "IsDead";
+    public string busyBool = "Busy";
 
     [Header("behavior")]
     public bool enablePatrol = true;
@@ -623,9 +624,23 @@ public class AswangAI : MonoBehaviourPun, IEnemyDamageable
     {
         if (isDead) return;
         isDead = true;
+        // stop any running ability coroutine so we don't apply damage after death
+        if (activeAbility != null)
+        {
+            try { StopCoroutine(activeAbility); } catch { }
+            activeAbility = null;
+        }
+        // clear/mark animator state
         if (animator != null)
         {
+            // reset triggers to avoid lingering attack/special triggers
+            foreach (var p in animator.parameters)
+            {
+                if (p.type == AnimatorControllerParameterType.Trigger)
+                    animator.ResetTrigger(p.name);
+            }
             if (HasBool(isDeadBool)) animator.SetBool(isDeadBool, true);
+            if (HasBool(busyBool)) animator.SetBool(busyBool, false);
             if (HasTrigger(dieTrigger)) animator.SetTrigger(dieTrigger);
         }
         if (controller != null) controller.enabled = false;

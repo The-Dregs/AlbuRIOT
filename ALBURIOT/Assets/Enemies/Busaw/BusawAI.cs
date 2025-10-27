@@ -1,5 +1,6 @@
 using UnityEngine;
 using Photon.Pun;
+using AlbuRIOT.AI.BehaviorTree;
 using TMPro;
 using UnityEngine.UI;
 
@@ -281,8 +282,10 @@ public class BusawAI : MonoBehaviourPun
                 float speed = chaseSpeed * Mathf.Clamp(orbitSpeedMultiplier, 0.1f, 2f);
                 if (controller.enabled)
                     controller.SimpleMove(tangent * speed);
-                var lookOrbit = new Vector3(t.position.x, transform.position.y, t.position.z);
-                transform.LookAt(lookOrbit);
+                    var lookOrbit = new Vector3(t.position.x, transform.position.y, t.position.z);
+                    float orbitRotSpeed = 720f * Time.deltaTime;
+                    Quaternion orbitTargetRot = Quaternion.LookRotation(lookOrbit - transform.position);
+                    transform.rotation = Quaternion.RotateTowards(transform.rotation, orbitTargetRot, orbitRotSpeed);
                 currentState = "orbiting (basic cd)";
                 return NodeState.Running;
             }
@@ -291,8 +294,10 @@ public class BusawAI : MonoBehaviourPun
         dir.Normalize();
         if (controller.enabled)
             controller.SimpleMove(dir * chaseSpeed);
-        var look = new Vector3(t.position.x, transform.position.y, t.position.z);
-        transform.LookAt(look);
+            var look = new Vector3(t.position.x, transform.position.y, t.position.z);
+            float chaseRotSpeed = 720f * Time.deltaTime;
+            Quaternion chaseTargetRot = Quaternion.LookRotation(look - transform.position);
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, chaseTargetRot, chaseRotSpeed);
         return NodeState.Running;
     }
 
@@ -466,10 +471,8 @@ public class BusawAI : MonoBehaviourPun
             {
                 DamageRelay.ApplyToPlayer(ps.gameObject, graspDamage);
                 // apply root effect (pseudo-code, replace with your root logic)
-                if (ps.TryGetComponent<PlayerMovement>(out var pm))
-                {
-                    pm.ApplyRoot(graspRootDuration);
-                }
+                // apply root effect (pseudo-code, replace with your root logic)
+                // Example: ps.ApplyRoot(graspRootDuration); // implement this in PlayerStats if needed
             }
         }
         isGrasping = false;
@@ -516,7 +519,10 @@ public class BusawAI : MonoBehaviourPun
             dir.Normalize();
             if (controller.enabled)
                 controller.SimpleMove(dir * patrolSpeed);
-            transform.LookAt(new Vector3(patrolTarget.x, transform.position.y, patrolTarget.z));
+                var look = new Vector3(patrolTarget.x, transform.position.y, patrolTarget.z);
+                float patrolRotSpeed = 720f * Time.deltaTime;
+                Quaternion patrolTargetRot = Quaternion.LookRotation(look - transform.position);
+                transform.rotation = Quaternion.RotateTowards(transform.rotation, patrolTargetRot, patrolRotSpeed);
             return NodeState.Running;
         }
         return NodeState.Success;

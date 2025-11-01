@@ -413,16 +413,30 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
     }
 
     [Header("ui damage indicator")]
+    [Tooltip("Enable damage text floating above player when taking damage")]
+    public bool enableDamageText = false;
     public GameObject damageTextPrefab; // optional, shows numbers like enemies
     public Transform damageTextSpawnPoint;
 
     private void ShowDamageIndicator(int amount)
     {
-        if (damageTextPrefab == null) return;
+        Debug.Log($"[PlayerStats] ShowDamageIndicator called with amount={amount}, enableDamageText={enableDamageText}, prefab={damageTextPrefab}");
+        if (!enableDamageText) 
+        {
+            Debug.Log("[PlayerStats] Damage text disabled, returning");
+            return;
+        }
+        if (damageTextPrefab == null) 
+        {
+            Debug.LogWarning("[PlayerStats] Damage text prefab is null!");
+            return;
+        }
         Vector3 spawnPos = damageTextSpawnPoint != null ? damageTextSpawnPoint.position : transform.position + Vector3.up * 2f;
         var go = Instantiate(damageTextPrefab, spawnPos, Quaternion.identity);
         var dmg = go.GetComponent<DamageText>();
+        Debug.Log($"[PlayerStats] Instantiated prefab, DamageText component: {dmg}");
         if (dmg != null) dmg.ShowDamage(amount);
+        else Debug.LogError("[PlayerStats] DamageText component not found on instantiated prefab!");
     }
 
     // pulse local screen overlay (if present) when damaged

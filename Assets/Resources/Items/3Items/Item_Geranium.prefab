@@ -95,7 +95,7 @@ MonoBehaviour:
   OwnershipTransfer: 0
   observableSearch: 2
   ObservedComponents: []
-  sceneViewId: 0
+  sceneViewId: 18
   InstantiationId: 0
   isRuntimeInstantiated: 0
 --- !u!1001 &8372022455069073446

@@ -39,6 +39,7 @@ applyTo: '**'
 
 # AI and Behavior Trees
 - **Enemies**: Enemy AI lives under `Assets/Scripts/Enemies/`. Behavior tree nodes under `Assets/Scripts/Enemies/BehaviorTree/`.
+- **Enemy AI guidelines**: See `.cursor/rules/enemy-ai-guidelines.mdc` for complete patterns on creating enemy AIs with proper busy state, coroutine management, and attack systems.
 - Keep node classes pure and side-effect free except where explicitly intended; tick methods should be deterministic given inputs.
 - Separate sensing (perception), decision (BT/utility), and actuation (movement/attacks) into distinct components.
 - Follow project BT semantics (Sequence/Selector) per docs; moves use cooldowns, busy windows, and effective range.

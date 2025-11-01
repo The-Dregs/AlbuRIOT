@@ -10,9 +10,10 @@ public class BungisngisAI : BaseEnemyAI
     [Header("Belly Laugh (Cone)")]
     public int laughDamage = 15;
     [Range(0f,180f)] public float laughConeAngle = 80f;
-    public float laughRange = 7f;
+    [Tooltip("Damage radius for cone attack - sphere around enemy")]
+    public float laughRadius = 7f;
     public float laughWindup = 0.5f;
-    public float laughCooldown = 8f;
+    public float laughCooldown = 20f;
     public GameObject laughWindupVFX;
     public GameObject laughImpactVFX;
     public Vector3 laughVFXOffset = Vector3.zero;
@@ -24,9 +25,9 @@ public class BungisngisAI : BaseEnemyAI
     [Header("Ground Pound (Strip Shockwave)")]
     public int poundDamage = 22;
     public float poundWidth = 2.0f;
-    public float poundRange = 6f;
+    public float poundRadius = 6f;
     public float poundWindup = 0.45f;
-    public float poundCooldown = 7f;
+    public float poundCooldown = 30f;
     public GameObject poundWindupVFX;
     public GameObject poundImpactVFX;
     public Vector3 poundVFXOffset = Vector3.zero;
@@ -39,11 +40,13 @@ public class BungisngisAI : BaseEnemyAI
     public float laughPreferredMinDistance = 3f;
     public float laughPreferredMaxDistance = 8f;
     [Range(0f, 1f)] public float laughSkillWeight = 0.7f;
-    [SerializeField] private float laughStoppageTime = 1f;
+    public float laughStoppageTime = 1f;
+    public float laughRecoveryTime = 0.5f;
     public float poundPreferredMinDistance = 5f;
     public float poundPreferredMaxDistance = 12f;
     [Range(0f, 1f)] public float poundSkillWeight = 0.8f;
-    [SerializeField] private float poundStoppageTime = 1f;
+    public float poundStoppageTime = 1f;
+    public float poundRecoveryTime = 0.5f;
     [Header("Spacing")]
     public float preferredDistance = 3.3f;
     [Range(0.1f,2f)] public float backoffSpeedMultiplier = 1.0f;
@@ -60,7 +63,15 @@ public class BungisngisAI : BaseEnemyAI
 
     private float lastLaughTime = -9999f;
     private float lastPoundTime = -9999f;
+    private float lastAnySkillRecoveryEnd = -9999f; // Track when ANY skill's recovery ended
+    private float lastAnySkillRecoveryStart = -9999f; // Track when recovery phase starts
     private AudioSource audioSource;
+    private Coroutine activeAbility;
+    private Coroutine basicRoutine;
+
+    // Debug accessors
+    public float LaughCooldownRemaining => Mathf.Max(0f, laughCooldown - (Time.time - lastLaughTime));
+    public float PoundCooldownRemaining => Mathf.Max(0f, poundCooldown - (Time.time - lastPoundTime));
 
     protected override void InitializeEnemy()
     {
@@ -100,12 +111,19 @@ public class BungisngisAI : BaseEnemyAI
 
     protected override void PerformBasicAttack()
     {
+        if (basicRoutine != null) return;
         if (enemyData == null) return;
         if (Time.time - lastAttackTime < enemyData.attackCooldown) return;
 
         var target = blackboard.Get<Transform>("target");
         if (target == null) return;
 
+        basicRoutine = StartCoroutine(CoBasicAttack(target));
+    }
+
+    private IEnumerator CoBasicAttack(Transform target)
+    {
+        BeginAction(AIState.BasicAttack);
         if (animator != null && HasTrigger(attackTrigger)) animator.SetTrigger(attackTrigger);
 
         float radius = Mathf.Max(0.8f, enemyData.attackRange);
@@ -117,13 +135,24 @@ public class BungisngisAI : BaseEnemyAI
             if (ps != null) ps.TakeDamage(enemyData.basicDamage);
         }
 
+        // Post-stop using attackMoveLock duration
+        float post = Mathf.Max(0.1f, enemyData.attackMoveLock);
+        while (post > 0f)
+        {
+            post -= Time.deltaTime;
+            if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+            yield return null;
+        }
+
         lastAttackTime = Time.time;
         attackLockTimer = enemyData.attackMoveLock;
+        basicRoutine = null;
+        EndAction();
     }
 
     protected override bool TrySpecialAbilities()
     {
-        if (isBusy) return false;
+        if (activeAbility != null) return false;
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
         float dist = Vector3.Distance(transform.position, target.position);
@@ -141,21 +170,26 @@ public class BungisngisAI : BaseEnemyAI
 
     private bool CanLaugh()
     {
+        if (activeAbility != null) return false;
+        if (basicRoutine != null) return false; // Don't interrupt basic attacks
+        if (isBusy || globalBusyTimer > 0f) return false; // Don't interrupt basic attacks or other actions
         if (Time.time - lastLaughTime < laughCooldown) return false;
+        if (Time.time - lastAnySkillRecoveryEnd < 4f) return false; // 4 second lock after any skill recovery
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
-        return Vector3.Distance(transform.position, target.position) <= laughRange + 0.5f;
+        return Vector3.Distance(transform.position, target.position) <= laughRadius + 0.5f;
     }
 
     private void StartLaugh()
     {
-        lastLaughTime = Time.time;
+        if (activeAbility != null) return;
         if (enemyData != null) lastAttackTime = Time.time;
-        StartCoroutine(CoLaugh());
+        activeAbility = StartCoroutine(CoLaugh());
     }
 
     private IEnumerator CoLaugh()
     {
+        BeginAction(AIState.Special1);
         if (animator != null && HasTrigger(laughTrigger)) animator.SetTrigger(laughTrigger);
         if (audioSource != null && laughWindupSFX != null) audioSource.PlayOneShot(laughWindupSFX);
         GameObject wind = null;
@@ -185,13 +219,18 @@ public class BungisngisAI : BaseEnemyAI
                 Quaternion rot = transform.rotation * Quaternion.Euler(0f, angle, 0f);
                 Vector3 spawnPos = transform.position + rot * laughProjectileSpawnOffset;
                 var projObj = Instantiate(laughProjectilePrefab, spawnPos, rot);
-                var proj = projObj.GetComponent<EnemyProjectile>();
+                var proj = projObj.GetComponent<BellyLaughProjectile>();
                 if (proj != null)
-                    proj.Initialize(gameObject, laughDamage, laughProjectileSpeed, laughProjectileLifetime);
+                {
+                    proj.damage = laughDamage;
+                    proj.owner = this;
+                    proj.speed = laughProjectileSpeed;
+                    proj.lifetime = laughProjectileLifetime;
+                }
             }
         }
 
-        var all = Physics.OverlapSphere(transform.position, laughRange, LayerMask.GetMask("Player"));
+        var all = Physics.OverlapSphere(transform.position, laughRadius, LayerMask.GetMask("Player"));
         Vector3 fwd = new Vector3(transform.forward.x, 0f, transform.forward.z).normalized;
         float halfAngle = Mathf.Clamp(laughConeAngle * 0.5f, 0f, 90f);
         foreach (var c in all)
@@ -206,25 +245,60 @@ public class BungisngisAI : BaseEnemyAI
                 if (ps != null) ps.TakeDamage(laughDamage);
             }
         }
+
+        // Stoppage recovery (AI frozen after attack)
+        if (laughStoppageTime > 0f)
+        {
+            float stopTimer = laughStoppageTime;
+            while (stopTimer > 0f)
+            {
+                stopTimer -= Time.deltaTime;
+                if (controller != null && controller.enabled)
+                    controller.SimpleMove(Vector3.zero);
+                yield return null;
+            }
+        }
+
+        // Recovery time (AI can move but skill still on cooldown)
+        if (laughRecoveryTime > 0f)
+        {
+            lastAnySkillRecoveryStart = Time.time; // Mark recovery start for gradual speed
+            float recovery = laughRecoveryTime;
+            while (recovery > 0f)
+            {
+                recovery -= Time.deltaTime;
+                yield return null;
+            }
+        }
+
+        activeAbility = null;
+        lastLaughTime = Time.time; // Set cooldown timer after all recovery is done
+        lastAnySkillRecoveryEnd = Time.time; // Set global lock timer after recovery ends
+        EndAction();
     }
 
     private bool CanPound()
     {
+        if (activeAbility != null) return false;
+        if (basicRoutine != null) return false; // Don't interrupt basic attacks
+        if (isBusy || globalBusyTimer > 0f) return false; // Don't interrupt basic attacks or other actions
         if (Time.time - lastPoundTime < poundCooldown) return false;
+        if (Time.time - lastAnySkillRecoveryEnd < 4f) return false; // 4 second lock after any skill recovery
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
-        return Vector3.Distance(transform.position, target.position) <= poundRange + 0.5f;
+        return Vector3.Distance(transform.position, target.position) <= poundRadius + 0.5f;
     }
 
     private void StartPound()
     {
-        lastPoundTime = Time.time;
+        if (activeAbility != null) return;
         if (enemyData != null) lastAttackTime = Time.time;
-        StartCoroutine(CoPound());
+        activeAbility = StartCoroutine(CoPound());
     }
 
     private IEnumerator CoPound()
     {
+        BeginAction(AIState.Special2);
         if (animator != null && HasTrigger(poundTrigger)) animator.SetTrigger(poundTrigger);
         if (audioSource != null && poundWindupSFX != null) audioSource.PlayOneShot(poundWindupSFX);
         GameObject wind = null;
@@ -245,7 +319,7 @@ public class BungisngisAI : BaseEnemyAI
         if (audioSource != null && poundImpactSFX != null) audioSource.PlayOneShot(poundImpactSFX);
 
         // strip: project forward; hit players within width band
-        var all = Physics.OverlapSphere(transform.position + transform.forward * (poundRange * 0.5f), poundRange, LayerMask.GetMask("Player"));
+        var all = Physics.OverlapSphere(transform.position + transform.forward * (poundRadius * 0.5f), poundRadius, LayerMask.GetMask("Player"));
         Vector3 fwd = new Vector3(transform.forward.x, 0f, transform.forward.z).normalized;
         foreach (var c in all)
         {
@@ -253,12 +327,42 @@ public class BungisngisAI : BaseEnemyAI
             rel.y = 0f;
             float along = Vector3.Dot(rel, fwd);
             float across = Vector3.Cross(fwd, rel.normalized).magnitude * rel.magnitude;
-            if (along >= 0f && along <= poundRange && Mathf.Abs(across) <= (poundWidth * 0.5f))
+            if (along >= 0f && along <= poundRadius && Mathf.Abs(across) <= (poundWidth * 0.5f))
             {
                 var ps = c.GetComponentInParent<PlayerStats>();
                 if (ps != null) ps.TakeDamage(poundDamage);
             }
         }
+
+        // Stoppage recovery (AI frozen after attack)
+        if (poundStoppageTime > 0f)
+        {
+            float stopTimer = poundStoppageTime;
+            while (stopTimer > 0f)
+            {
+                stopTimer -= Time.deltaTime;
+                if (controller != null && controller.enabled)
+                    controller.SimpleMove(Vector3.zero);
+                yield return null;
+            }
+        }
+
+        // Recovery time (AI can move but skill still on cooldown)
+        if (poundRecoveryTime > 0f)
+        {
+            lastAnySkillRecoveryStart = Time.time; // Mark recovery start for gradual speed
+            float recovery = poundRecoveryTime;
+            while (recovery > 0f)
+            {
+                recovery -= Time.deltaTime;
+                yield return null;
+            }
+        }
+
+        activeAbility = null;
+        lastPoundTime = Time.time; // Set cooldown timer after all recovery is done
+        lastAnySkillRecoveryEnd = Time.time; // Set global lock timer after recovery ends
+        EndAction();
     }
 
     private bool IsFacingTarget(Transform target, float maxAngle)
@@ -280,5 +384,25 @@ public class BungisngisAI : BaseEnemyAI
         }
         if (controller != null && controller.enabled)
             controller.SimpleMove(Vector3.zero);
+    }
+
+    protected override float GetMoveSpeed()
+    {
+        float baseSpeed = base.GetMoveSpeed();
+        
+        // If we're in recovery phase, gradually increase speed from 0.3 to 1.0
+        if (Time.time >= lastAnySkillRecoveryStart && Time.time <= lastAnySkillRecoveryEnd && lastAnySkillRecoveryStart >= 0f)
+        {
+            float recoveryDuration = lastAnySkillRecoveryEnd - lastAnySkillRecoveryStart;
+            if (recoveryDuration > 0f)
+            {
+                float elapsed = Time.time - lastAnySkillRecoveryStart;
+                float progress = Mathf.Clamp01(elapsed / recoveryDuration);
+                float speedMultiplier = Mathf.Lerp(0.3f, 1.0f, progress); // Start at 30% speed, lerp to 100%
+                return baseSpeed * speedMultiplier;
+            }
+        }
+        
+        return baseSpeed;
     }
 }

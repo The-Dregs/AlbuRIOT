@@ -415,7 +415,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 4195a3c563b29b348911b2aae89458dd, type: 3}
       propertyPath: m_LocalPosition.z
-      value: -4.45
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 4195a3c563b29b348911b2aae89458dd, type: 3}
       propertyPath: m_LocalRotation.w
@@ -561,6 +561,12 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 4195a3c563b29b348911b2aae89458dd, type: 3}
       insertIndex: -1
       addedObject: {fileID: 9075015069281603567}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 4195a3c563b29b348911b2aae89458dd, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 5850041797910186070}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 4195a3c563b29b348911b2aae89458dd, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 4687851211639880680}
   m_SourcePrefab: {fileID: 100100000, guid: 4195a3c563b29b348911b2aae89458dd, type: 3}
 --- !u!1 &3635349091600007418 stripped
 GameObject:
@@ -671,58 +677,102 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: a83c2e228d1f7114e906833eacd61edf, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  maxHealth: 350
-  basicDamage: 15
-  basicRange: 4
-  basicCooldown: 1.5
-  basicWindup: 0.3
-  laughDamage: 10
-  laughConeAngle: 40
-  laughRange: 8
-  laughWindup: 1.4
-  laughCooldown: 20
-  laughStopDuration: 1.5
-  bellyLaughProjectilePrefab: {fileID: 1123738013873855760, guid: 7267d88127d55824c825f7d1e9324271, type: 3}
-  poundDamage: 40
-  poundStripWidth: 2
-  poundRange: 6
-  poundWindup: 1.7
-  poundCooldown: 40
-  poundStopDuration: 2
-  groundPoundVFXPrefab: {fileID: 773637875429329918, guid: 5ebf45b6fef874c4fa36cd420dac9604, type: 3}
-  groundPoundVFXOffset: {x: 0, y: 0, z: 0}
-  groundPoundIndicatorPrefab: {fileID: 641913134782200105, guid: 0b1115323f5ee224e82894c37647d809, type: 3}
-  groundPoundIndicatorOffset: {x: 0, y: 0.1, z: 0}
-  turnSpeed: 480
-  patrolSpeed: 1
-  chaseSpeed: 2
-  attackMoveLock: 0.35
-  orbitWhenBasicOnCooldown: 1
-  orbitSpeedMultiplier: 0.2
+  enemyData: {fileID: 11400000, guid: 5d31a243f5640a84ab7e444082ce5201, type: 2}
   animator: {fileID: 3100923316543591562}
   speedParam: Speed
   attackTrigger: Attack
-  laughTrigger: Laugh
-  poundTrigger: Pound
   hitTrigger: Hit
   dieTrigger: Die
   isDeadBool: IsDead
-  enablePatrol: 1
-  patrolRadius: 10
-  patrolWait: 1.25
+  showDebugInfo: 0
+  rotationSpeedDegrees: 500
+  patrolSpeed: 1.5
+  chaseSpeed: 2.5
+  orbitWhenOnCooldown: 1
+  orbitSpeedMultiplier: 0.5
+  desiredAttackDistanceFraction: 0.85
+  buffDamageVFXPrefab: {fileID: 5433017580198672396, guid: 7440468fe76adc64b81167a34cb91a10, type: 3}
+  buffSpeedVFXPrefab: {fileID: 8652154132609600191, guid: 5efed870bd862c242bd383e8f497d4d2, type: 3}
+  buffStaminaVFXPrefab: {fileID: 5758305392496111728, guid: 8be7207037ab8b44484315c336527a8d, type: 3}
+  buffHealthVFXPrefab: {fileID: 3024800097872928849, guid: 4d542573c3b4532419c42b2ada6c6f2a, type: 3}
+  buffVfxOffset: {x: 0, y: 0, z: 0}
+  buffVfxScale: 1.5
+  laughDamage: 10
+  laughConeAngle: 40
+  laughRadius: 7
+  laughWindup: 1.8
+  laughCooldown: 20
+  laughWindupVFX: {fileID: 0}
+  laughImpactVFX: {fileID: 0}
+  laughVFXOffset: {x: 0, y: 0, z: 0}
+  laughVFXScale: 1
+  laughWindupSFX: {fileID: 0}
+  laughImpactSFX: {fileID: 0}
+  laughTrigger: Laugh
+  poundDamage: 40
+  poundWidth: 2
+  poundRadius: 6.8
+  poundWindup: 1.6
+  poundCooldown: 30
+  poundWindupVFX: {fileID: 0}
+  poundImpactVFX: {fileID: 773637875429329918, guid: 5ebf45b6fef874c4fa36cd420dac9604, type: 3}
+  poundVFXOffset: {x: 0, y: 0, z: 0}
+  poundVFXScale: 0.5
+  poundWindupSFX: {fileID: 0}
+  poundImpactSFX: {fileID: 0}
+  poundTrigger: Pound
+  laughPreferredMinDistance: 7
+  laughPreferredMaxDistance: 9
+  laughSkillWeight: 0.7
+  laughStoppageTime: 0.5
+  laughRecoveryTime: 0.5
+  poundPreferredMinDistance: 5
+  poundPreferredMaxDistance: 6
+  poundSkillWeight: 0.8
+  poundStoppageTime: 1
+  poundRecoveryTime: 0.5
+  preferredDistance: 4
+  backoffSpeedMultiplier: 1
+  specialFacingAngle: 20
+  laughProjectilePrefab: {fileID: 1123738013873855760, guid: 274a5c43ab97dfc41b7b9c8d000e82b9, type: 3}
+  laughProjectileSpawnOffset: {x: 0, y: 2, z: 1.8}
+  laughProjectileSpeed: 12
+  laughProjectileLifetime: 2.5
+  laughProjectileSpreadAngle: 0
+  laughProjectileCount: 1
+--- !u!114 &5850041797910186070
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3635349091600007418}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fcd237adfc0312341bdacd792d981091, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EnemyHealthBar
+  enemy: {fileID: 0}
   healthBarRoot: {fileID: 0}
-  healthBar: {fileID: 0}
-  healthbarHideDelay: 3
-  abilityHardTimeout: 8
-  postSpecialLock: 0.75
-  showDebugOverhead: 1
-  debugYOffset: 3
-  debugColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
-  debugShowDetails: 1
-  bellyLaughProjectileSpeed: 12
-  bellyLaughProjectileLifetime: 2
-  bellyLaughProjectileDamage: 10
-  bellyLaughProjectileOffset: {x: 0, y: 2.8, z: 0.7}
+  slider: {fileID: 0}
+  hideDelaySeconds: 3
+--- !u!114 &4687851211639880680
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3635349091600007418}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 685a8e6a137a79948b39d3da9dd52fa3, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::EnemyDebugOverhead
+  enemy: {fileID: 0}
+  enable: 1
+  yOffset: 2.2
+  color: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
+  fontSize: 3
 --- !u!4 &4123197262294407744 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: -8679921383154817045, guid: 4195a3c563b29b348911b2aae89458dd, type: 3}

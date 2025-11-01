@@ -67,7 +67,17 @@ public class EnemyDebugOverhead : MonoBehaviour
 		}
 		else
 		{
-			tmp.text = header + $"\nCD basic:{basicCd:F1}";
+			// If this is a Bungisngis, show ability cooldowns
+			var bung = enemy as BungisngisAI;
+			if (bung != null)
+			{
+				string cds = $"CD basic:{basicCd:F1}  laugh:{bung.LaughCooldownRemaining:F1}  pound:{bung.PoundCooldownRemaining:F1}";
+				tmp.text = header + "\n" + cds;
+			}
+			else
+			{
+				tmp.text = header + $"\nCD basic:{basicCd:F1}";
+			}
 		}
 	}
 

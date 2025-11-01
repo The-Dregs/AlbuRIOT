@@ -137,9 +137,30 @@ public class TikbalangAI : BaseEnemyAI
     private IEnumerator CoBasicAttack(Transform target)
     {
         BeginAction(AIState.BasicAttack);
-        if (animator != null && HasTrigger(attackTrigger)) animator.SetTrigger(attackTrigger);
+        
+        // Windup animation trigger
+        if (animator != null)
+        {
+            if (HasTrigger(attackWindupTrigger))
+                animator.SetTrigger(attackWindupTrigger);
+            else if (HasTrigger(attackTrigger))
+                animator.SetTrigger(attackTrigger);
+        }
 
-        // Apply damage
+        // Windup phase - freeze movement during windup
+        float windup = Mathf.Max(0f, enemyData.attackWindup);
+        while (windup > 0f)
+        {
+            windup -= Time.deltaTime;
+            if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+            yield return null;
+        }
+
+        // Impact animation trigger
+        if (animator != null && HasTrigger(attackImpactTrigger))
+            animator.SetTrigger(attackImpactTrigger);
+
+        // Apply damage after windup
         float radius = Mathf.Max(0.8f, enemyData.attackRange);
         Vector3 center = transform.position + transform.forward * (enemyData.attackRange * 0.5f);
         var cols = Physics.OverlapSphere(center, radius, LayerMask.GetMask("Player"));
@@ -231,6 +252,20 @@ public class TikbalangAI : BaseEnemyAI
     {
         BeginAction(AIState.Special1);
         
+        // Capture charge direction before windup (where to charge)
+        var target = blackboard.Get<Transform>("target");
+        Vector3 chargeDirection = transform.forward; // Default to current forward
+        if (target != null)
+        {
+            Vector3 toTarget = new Vector3(target.position.x, transform.position.y, target.position.z) - transform.position;
+            if (toTarget.sqrMagnitude > 0.0001f)
+            {
+                chargeDirection = toTarget.normalized;
+                // Set rotation once before windup
+                transform.rotation = Quaternion.LookRotation(chargeDirection);
+            }
+        }
+        
         // Windup animation
         if (animator != null && HasTrigger(chargeWindupTrigger)) animator.SetTrigger(chargeWindupTrigger);
         // windup SFX (stoppable)
@@ -249,19 +284,13 @@ public class TikbalangAI : BaseEnemyAI
             if (chargeVFXScale > 0f) chargeWindupFx.transform.localScale = Vector3.one * chargeVFXScale;
         }
         
-        // Face the target during windup
-        var target = blackboard.Get<Transform>("target");
+        // Windup phase - lock rotation (don't face player)
         float windup = chargeWindup;
-        while (windup > 0f && target != null)
+        while (windup > 0f)
         {
             windup -= Time.deltaTime;
-            Vector3 look = new Vector3(target.position.x, transform.position.y, target.position.z);
-            Vector3 lookDir = (look - transform.position);
-            if (lookDir.sqrMagnitude > 0.0001f)
-            {
-                Quaternion targetRot = Quaternion.LookRotation(lookDir);
-                transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotationSpeedDegrees * Time.deltaTime);
-            }
+            // Lock rotation during windup
+            transform.rotation = Quaternion.LookRotation(chargeDirection);
             if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
             yield return null;
         }
@@ -284,8 +313,7 @@ public class TikbalangAI : BaseEnemyAI
         // Charge animation trigger
         if (animator != null && HasTrigger(chargeTrigger)) animator.SetTrigger(chargeTrigger);
 
-        // Charge in forward direction (already facing target from windup)
-        Vector3 chargeDirection = transform.forward;
+        // Charge in locked direction (set before windup)
         float chargeTime = chargeDuration;
         HashSet<PlayerStats> hitPlayers = new HashSet<PlayerStats>(); // Track players already hit
         
@@ -322,13 +350,25 @@ public class TikbalangAI : BaseEnemyAI
             if (animator != null && HasTrigger(skillStoppageTrigger)) animator.SetTrigger(skillStoppageTrigger);
             
             float stopTimer = chargeStoppageTime;
+            float quarterStoppage = chargeStoppageTime * 0.75f;
+            
             while (stopTimer > 0f)
             {
                 stopTimer -= Time.deltaTime;
                 if (controller != null && controller.enabled)
                     controller.SimpleMove(Vector3.zero);
+                
+                // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
+                if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
+                {
+                    animator.SetBool("Exhausted", true);
+                }
+                
                 yield return null;
             }
+            
+            // Clear Exhausted boolean parameter
+            if (animator != null) animator.SetBool("Exhausted", false);
         }
 
         // Recovery time (AI can move but skill still on cooldown)
@@ -433,13 +473,25 @@ public class TikbalangAI : BaseEnemyAI
             if (animator != null && HasTrigger(skillStoppageTrigger)) animator.SetTrigger(skillStoppageTrigger);
             
             float stopTimer = stompStoppageTime;
+            float quarterStoppage = stompStoppageTime * 0.75f;
+            
             while (stopTimer > 0f)
             {
                 stopTimer -= Time.deltaTime;
                 if (controller != null && controller.enabled)
                     controller.SimpleMove(Vector3.zero);
+                
+                // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
+                if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
+                {
+                    animator.SetBool("Exhausted", true);
+                }
+                
                 yield return null;
             }
+            
+            // Clear Exhausted boolean parameter
+            if (animator != null) animator.SetBool("Exhausted", false);
         }
 
         // Recovery time (AI can move but skill still on cooldown)
@@ -464,6 +516,18 @@ public class TikbalangAI : BaseEnemyAI
 
     protected override float GetMoveSpeed()
     {
+        // Return 0 if AI is busy or has active ability (should be stopped)
+        if (isBusy || globalBusyTimer > 0f || activeAbility != null || basicRoutine != null)
+        {
+            return 0f;
+        }
+        
+        // If AI is idle (not patrolling or chasing), return 0
+        if (aiState == AIState.Idle)
+        {
+            return 0f;
+        }
+        
         float baseSpeed = base.GetMoveSpeed();
         
         // If we're in recovery phase, gradually increase speed from 0.3 to 1.0

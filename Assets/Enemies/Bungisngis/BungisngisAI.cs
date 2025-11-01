@@ -16,11 +16,14 @@ public class BungisngisAI : BaseEnemyAI
     public float laughCooldown = 20f;
     public GameObject laughWindupVFX;
     public GameObject laughImpactVFX;
-    public Vector3 laughVFXOffset = Vector3.zero;
-    public float laughVFXScale = 1.0f;
+    public Vector3 laughWindupVFXOffset = Vector3.zero;
+    public float laughWindupVFXScale = 1.0f;
+    public Vector3 laughImpactVFXOffset = Vector3.zero;
+    public float laughImpactVFXScale = 1.0f;
     public AudioClip laughWindupSFX;
     public AudioClip laughImpactSFX;
-    public string laughTrigger = "Laugh";
+    public string laughWindupTrigger = "LaughWindup";
+    public string laughMainTrigger = "LaughMain";
 
     [Header("Ground Pound (Strip Shockwave)")]
     public int poundDamage = 22;
@@ -30,11 +33,14 @@ public class BungisngisAI : BaseEnemyAI
     public float poundCooldown = 30f;
     public GameObject poundWindupVFX;
     public GameObject poundImpactVFX;
-    public Vector3 poundVFXOffset = Vector3.zero;
-    public float poundVFXScale = 1.0f;
+    public Vector3 poundWindupVFXOffset = Vector3.zero;
+    public float poundWindupVFXScale = 1.0f;
+    public Vector3 poundImpactVFXOffset = Vector3.zero;
+    public float poundImpactVFXScale = 1.0f;
     public AudioClip poundWindupSFX;
     public AudioClip poundImpactSFX;
-    public string poundTrigger = "Pound";
+    public string poundWindupTrigger = "PoundWindup";
+    public string poundMainTrigger = "PoundMain";
 
     [Header("Skill Selection Tuning")]
     public float laughPreferredMinDistance = 3f;
@@ -124,8 +130,30 @@ public class BungisngisAI : BaseEnemyAI
     private IEnumerator CoBasicAttack(Transform target)
     {
         BeginAction(AIState.BasicAttack);
-        if (animator != null && HasTrigger(attackTrigger)) animator.SetTrigger(attackTrigger);
+        
+        // Windup animation trigger
+        if (animator != null)
+        {
+            if (HasTrigger(attackWindupTrigger))
+                animator.SetTrigger(attackWindupTrigger);
+            else if (HasTrigger(attackTrigger))
+                animator.SetTrigger(attackTrigger);
+        }
 
+        // Windup phase - freeze movement during windup
+        float windup = Mathf.Max(0f, enemyData.attackWindup);
+        while (windup > 0f)
+        {
+            windup -= Time.deltaTime;
+            if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+            yield return null;
+        }
+
+        // Impact animation trigger
+        if (animator != null && HasTrigger(attackImpactTrigger))
+            animator.SetTrigger(attackImpactTrigger);
+
+        // Apply damage after windup
         float radius = Mathf.Max(0.8f, enemyData.attackRange);
         Vector3 center = transform.position + transform.forward * (enemyData.attackRange * 0.5f);
         var cols = Physics.OverlapSphere(center, radius, LayerMask.GetMask("Player"));
@@ -190,24 +218,35 @@ public class BungisngisAI : BaseEnemyAI
     private IEnumerator CoLaugh()
     {
         BeginAction(AIState.Special1);
-        if (animator != null && HasTrigger(laughTrigger)) animator.SetTrigger(laughTrigger);
-        if (audioSource != null && laughWindupSFX != null) audioSource.PlayOneShot(laughWindupSFX);
+        
+        // Windup phase - separate trigger, VFX, and SFX
+        if (animator != null && HasTrigger(laughWindupTrigger))
+            animator.SetTrigger(laughWindupTrigger);
+        if (audioSource != null && laughWindupSFX != null) 
+            audioSource.PlayOneShot(laughWindupSFX);
         GameObject wind = null;
         if (laughWindupVFX != null)
         {
             wind = Instantiate(laughWindupVFX, transform);
-            wind.transform.localPosition = laughVFXOffset;
-            if (laughVFXScale > 0f) wind.transform.localScale = Vector3.one * laughVFXScale;
+            wind.transform.localPosition = laughWindupVFXOffset;
+            if (laughWindupVFXScale > 0f) 
+                wind.transform.localScale = Vector3.one * laughWindupVFXScale;
         }
         yield return new WaitForSeconds(Mathf.Max(0f, laughWindup));
         if (wind != null) Destroy(wind);
+        
+        // Impact phase - separate trigger, VFX, and SFX
+        if (animator != null && HasTrigger(laughMainTrigger))
+            animator.SetTrigger(laughMainTrigger);
         if (laughImpactVFX != null)
         {
             var fx = Instantiate(laughImpactVFX, transform);
-            fx.transform.localPosition = laughVFXOffset;
-            if (laughVFXScale > 0f) fx.transform.localScale = Vector3.one * laughVFXScale;
+            fx.transform.localPosition = laughImpactVFXOffset;
+            if (laughImpactVFXScale > 0f) 
+                fx.transform.localScale = Vector3.one * laughImpactVFXScale;
         }
-        if (audioSource != null && laughImpactSFX != null) audioSource.PlayOneShot(laughImpactSFX);
+        if (audioSource != null && laughImpactSFX != null) 
+            audioSource.PlayOneShot(laughImpactSFX);
         // Shoot projectiles forward
         if (laughProjectilePrefab != null && laughProjectileCount > 0)
         {
@@ -250,13 +289,25 @@ public class BungisngisAI : BaseEnemyAI
         if (laughStoppageTime > 0f)
         {
             float stopTimer = laughStoppageTime;
+            float quarterStoppage = laughStoppageTime * 0.75f;
+            
             while (stopTimer > 0f)
             {
                 stopTimer -= Time.deltaTime;
                 if (controller != null && controller.enabled)
                     controller.SimpleMove(Vector3.zero);
+                
+                // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
+                if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
+                {
+                    animator.SetBool("Exhausted", true);
+                }
+                
                 yield return null;
             }
+            
+            // Clear Exhausted boolean parameter
+            if (animator != null) animator.SetBool("Exhausted", false);
         }
 
         // Recovery time (AI can move but skill still on cooldown)
@@ -299,24 +350,35 @@ public class BungisngisAI : BaseEnemyAI
     private IEnumerator CoPound()
     {
         BeginAction(AIState.Special2);
-        if (animator != null && HasTrigger(poundTrigger)) animator.SetTrigger(poundTrigger);
-        if (audioSource != null && poundWindupSFX != null) audioSource.PlayOneShot(poundWindupSFX);
+        
+        // Windup phase - separate trigger, VFX, and SFX
+        if (animator != null && HasTrigger(poundWindupTrigger))
+            animator.SetTrigger(poundWindupTrigger);
+        if (audioSource != null && poundWindupSFX != null) 
+            audioSource.PlayOneShot(poundWindupSFX);
         GameObject wind = null;
         if (poundWindupVFX != null)
         {
             wind = Instantiate(poundWindupVFX, transform);
-            wind.transform.localPosition = poundVFXOffset;
-            if (poundVFXScale > 0f) wind.transform.localScale = Vector3.one * poundVFXScale;
+            wind.transform.localPosition = poundWindupVFXOffset;
+            if (poundWindupVFXScale > 0f) 
+                wind.transform.localScale = Vector3.one * poundWindupVFXScale;
         }
         yield return new WaitForSeconds(Mathf.Max(0f, poundWindup));
         if (wind != null) Destroy(wind);
+        
+        // Impact phase - separate trigger, VFX, and SFX
+        if (animator != null && HasTrigger(poundMainTrigger))
+            animator.SetTrigger(poundMainTrigger);
         if (poundImpactVFX != null)
         {
             var fx = Instantiate(poundImpactVFX, transform);
-            fx.transform.localPosition = poundVFXOffset;
-            if (poundVFXScale > 0f) fx.transform.localScale = Vector3.one * poundVFXScale;
+            fx.transform.localPosition = poundImpactVFXOffset;
+            if (poundImpactVFXScale > 0f) 
+                fx.transform.localScale = Vector3.one * poundImpactVFXScale;
         }
-        if (audioSource != null && poundImpactSFX != null) audioSource.PlayOneShot(poundImpactSFX);
+        if (audioSource != null && poundImpactSFX != null) 
+            audioSource.PlayOneShot(poundImpactSFX);
 
         // strip: project forward; hit players within width band
         var all = Physics.OverlapSphere(transform.position + transform.forward * (poundRadius * 0.5f), poundRadius, LayerMask.GetMask("Player"));
@@ -338,13 +400,25 @@ public class BungisngisAI : BaseEnemyAI
         if (poundStoppageTime > 0f)
         {
             float stopTimer = poundStoppageTime;
+            float quarterStoppage = poundStoppageTime * 0.75f;
+            
             while (stopTimer > 0f)
             {
                 stopTimer -= Time.deltaTime;
                 if (controller != null && controller.enabled)
                     controller.SimpleMove(Vector3.zero);
+                
+                // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
+                if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
+                {
+                    animator.SetBool("Exhausted", true);
+                }
+                
                 yield return null;
             }
+            
+            // Clear Exhausted boolean parameter
+            if (animator != null) animator.SetBool("Exhausted", false);
         }
 
         // Recovery time (AI can move but skill still on cooldown)
@@ -388,6 +462,18 @@ public class BungisngisAI : BaseEnemyAI
 
     protected override float GetMoveSpeed()
     {
+        // Return 0 if AI is busy or has active ability (should be stopped)
+        if (isBusy || globalBusyTimer > 0f || activeAbility != null || basicRoutine != null)
+        {
+            return 0f;
+        }
+        
+        // If AI is idle (not patrolling or chasing), return 0
+        if (aiState == AIState.Idle)
+        {
+            return 0f;
+        }
+        
         float baseSpeed = base.GetMoveSpeed();
         
         // If we're in recovery phase, gradually increase speed from 0.3 to 1.0

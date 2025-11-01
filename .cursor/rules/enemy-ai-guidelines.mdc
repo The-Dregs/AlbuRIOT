@@ -4,7 +4,9 @@ alwaysApply: true
 
 # Enemy AI Creation Guidelines
 
-Based on the BungisngisAI and TikbalangAI refactoring and proven patterns from AmomongoAI and BerberokaAI.
+Based on the BungisngisAI, TikbalangAI, and KapreAI refactoring and proven patterns from AmomongoAI and BerberokaAI.
+
+**Last Updated**: Includes fixes for movement speed management, patrol wait handling, rotation locking for charge/dash attacks, and comprehensive busy state management.
 
 ## Core Principles
 
@@ -25,6 +27,13 @@ Always check busy states before starting new actions:
 - `isBusy` - Set by `BeginAction()`, cleared by `EndAction()`
 - `globalBusyTimer` - Post-action cooldown enforced by base class
 - Custom coroutine tracking (e.g., `activeAbility`, `basicRoutine`)
+- `aiState` - Must be set to `AIState.Idle` when AI is stationary (patrol wait, reached destination, etc.)
+
+### 4. Movement Speed Management
+**CRITICAL**: The animator speed parameter must show 0 when the AI is stopped:
+- `GetMoveSpeed()` must return 0 when `aiState == AIState.Idle`
+- During patrol wait phase, set `aiState = AIState.Idle` and stop movement with `controller.SimpleMove(Vector3.zero)`
+- Base speed values (e.g., patrol speed of 2) should NOT be visible when AI is stationary
 
 ## Required Imports
 
@@ -55,6 +64,16 @@ private Coroutine basicRoutine;     // Track basic attack coroutines
 private AudioSource audioSource;    // Shared audio component
 ```
 
+#### EnemyData Fields (ScriptableObject)
+Basic attack parameters are defined in `EnemyData`:
+```csharp
+// In EnemyData ScriptableObject
+public float attackWindup = 0.3f;  // Basic attack windup time
+public float attackRange = 2.2f;
+public float attackCooldown = 1.25f;
+public float attackMoveLock = 0.35f;
+```
+
 #### Inspector Fields Pattern
 ```csharp
 [Header("Ability Name (Attack Type)")]
@@ -62,13 +81,22 @@ public int abilityDamage = 15;
 public float abilityRadius = 7f;      // Use "radius", not "range" for damage areas
 public float abilityWindup = 0.5f;    // Windup before damage
 public float abilityCooldown = 20f;   // Time between uses
+
+// Separate VFX for windup and impact
 public GameObject abilityWindupVFX;
 public GameObject abilityImpactVFX;
-public Vector3 abilityVFXOffset = Vector3.zero;
-public float abilityVFXScale = 1.0f;
+public Vector3 abilityWindupVFXOffset = Vector3.zero;
+public float abilityWindupVFXScale = 1.0f;
+public Vector3 abilityImpactVFXOffset = Vector3.zero;
+public float abilityImpactVFXScale = 1.0f;
+
+// Separate SFX for windup and impact
 public AudioClip abilityWindupSFX;
 public AudioClip abilityImpactSFX;
-public string abilityTrigger = "AbilityName";
+
+// Separate animation triggers for windup and impact/main
+public string abilityWindupTrigger = "AbilityWindup";  // Trigger for windup phase
+public string abilityMainTrigger = "AbilityMain";      // Trigger for impact/main phase
 ```
 
 #### Charge/Dash Inspector Fields
@@ -96,14 +124,45 @@ public string chargeTrigger = "Charge";
 public string skillStoppageTrigger = "SkillStoppage";
 ```
 
-**Note**: For charge/dash attacks, use separate animation triggers for windup, charge, and stoppage phases.
+**Note**: For charge/dash attacks and other abilities with dedicated windup (e.g., Stomp, Slam), use separate animation triggers for windup, main action, and stoppage phases.
+
+#### Teleporting Attack Inspector Fields
+```csharp
+[Header("Teleport Strike")]
+public int teleportStrikeDamage = 30;
+public float teleportStrikeRadius = 1.6f;
+public float teleportWindup = 0.5f;
+public float teleportCooldown = 9f;
+public float teleportBehindDistance = 1.2f;
+public GameObject teleportWindupVFX;
+public GameObject teleportImpactVFX;
+public Vector3 teleportVFXOffset = Vector3.zero;
+public float teleportVFXScale = 1.0f;
+public Vector3 teleportImpactVFXOffset = Vector3.zero;
+public float teleportImpactVFXScale = 1.0f;
+public AudioClip teleportWindupSFX;
+public AudioClip teleportImpactSFX;
+public string teleportTrigger = "Teleport";
+```
+
+**Note**: For teleporting attacks, capture target position when ability is initiated (in `Start` method), NOT during windup. Teleport to where player was FIRST LOCATED.
 
 #### Recovery System (for specials)
 ```csharp
+[Header("Animation")]
+// Special ability triggers (REQUIRED for all skills)
+public string abilityWindupTrigger = "AbilityWindup";  // REQUIRED: separate windup trigger
+public string abilityMainTrigger = "AbilityMain";     // REQUIRED: separate main/impact trigger
+public string skillStoppageTrigger = "SkillStoppage";  // For stoppage phase after skills
+
 [Header("Skill Selection Tuning")]
 public float abilityStoppageTime = 1f;    // AI frozen after attack
 public float abilityRecoveryTime = 0.5f;  // AI can move but skill on cooldown
 ```
+
+**Note**: All skills MUST use separate animation triggers for windup and impact/main phases. Basic attack triggers (`attackWindupTrigger` and `attackImpactTrigger`) are defined in `BaseEnemyAI` and use `EnemyData.attackWindup` from the ScriptableObject.
+
+**Animation Parameter**: Add a boolean animator parameter named `"Exhausted"` that gets set to `true` when 75% of the stoppage time remains (at 25% elapsed) and `false` when the stoppage phase ends. This allows animations to respond to the exhaustion state. **This is for skills only, not basic attacks.**
 
 ### Core Methods Pattern
 
@@ -112,6 +171,8 @@ public float abilityRecoveryTime = 0.5f;  // AI can move but skill on cooldown
 protected override void PerformBasicAttack()
 {
     if (basicRoutine != null) return;  // Prevent overlap
+    if (activeAbility != null) return; // Don't interrupt special abilities
+    if (isBusy || globalBusyTimer > 0f) return; // Don't interrupt other actions
     if (enemyData == null) return;
     if (Time.time - lastAttackTime < enemyData.attackCooldown) return;
 
@@ -124,9 +185,30 @@ protected override void PerformBasicAttack()
 private IEnumerator CoBasicAttack(Transform target)
 {
     BeginAction(AIState.BasicAttack);  // Set busy state
-    if (animator != null && HasTrigger(attackTrigger)) animator.SetTrigger(attackTrigger);
+    
+    // Windup animation trigger (use separate triggers if available)
+    if (animator != null)
+    {
+        if (HasTrigger(attackWindupTrigger))
+            animator.SetTrigger(attackWindupTrigger);
+        else if (HasTrigger(attackTrigger))
+            animator.SetTrigger(attackTrigger);
+    }
 
-    // Apply damage immediately
+    // Windup phase - freeze movement during windup (NO facing for basic attacks)
+    float windup = Mathf.Max(0f, enemyData.attackWindup);
+    while (windup > 0f)
+    {
+        windup -= Time.deltaTime;
+        if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+        yield return null;
+    }
+
+    // Impact animation trigger
+    if (animator != null && HasTrigger(attackImpactTrigger))
+        animator.SetTrigger(attackImpactTrigger);
+
+    // Apply damage after windup
     float radius = Mathf.Max(0.8f, enemyData.attackRange);
     Vector3 center = transform.position + transform.forward * (enemyData.attackRange * 0.5f);
     var cols = Physics.OverlapSphere(center, radius, LayerMask.GetMask("Player"));
@@ -177,28 +259,46 @@ private void StartAbility()
 private IEnumerator CoAbility()
 {
     BeginAction(AIState.Special1);  // Choose appropriate state
-    if (animator != null && HasTrigger(abilityTrigger)) animator.SetTrigger(abilityTrigger);
     
-    // Windup phase
+    // Windup phase - separate trigger, VFX, and SFX
+    if (animator != null && HasTrigger(abilityWindupTrigger))
+        animator.SetTrigger(abilityWindupTrigger);
+    
     if (audioSource != null && abilityWindupSFX != null) 
         audioSource.PlayOneShot(abilityWindupSFX);
+    
     GameObject wind = null;
     if (abilityWindupVFX != null)
     {
         wind = Instantiate(abilityWindupVFX, transform);
-        wind.transform.localPosition = abilityVFXOffset;
-        if (abilityVFXScale > 0f) wind.transform.localScale = Vector3.one * abilityVFXScale;
+        wind.transform.localPosition = abilityWindupVFXOffset;
+        if (abilityWindupVFXScale > 0f) 
+            wind.transform.localScale = Vector3.one * abilityWindupVFXScale;
     }
-    yield return new WaitForSeconds(Mathf.Max(0f, abilityWindup));
+    
+    // Windup phase - freeze movement (NO facing for regular attacks; charge/leap attacks face during windup)
+    float windup = Mathf.Max(0f, abilityWindup);
+    while (windup > 0f)
+    {
+        windup -= Time.deltaTime;
+        if (controller != null && controller.enabled)
+            controller.SimpleMove(Vector3.zero);
+        yield return null;
+    }
     if (wind != null) Destroy(wind);
 
-    // Impact phase
+    // Impact/Main phase - separate trigger, VFX, and SFX
+    if (animator != null && HasTrigger(abilityMainTrigger))
+        animator.SetTrigger(abilityMainTrigger);
+    
     if (abilityImpactVFX != null)
     {
         var fx = Instantiate(abilityImpactVFX, transform);
-        fx.transform.localPosition = abilityVFXOffset;
-        if (abilityVFXScale > 0f) fx.transform.localScale = Vector3.one * abilityVFXScale;
+        fx.transform.localPosition = abilityImpactVFXOffset;
+        if (abilityImpactVFXScale > 0f) 
+            fx.transform.localScale = Vector3.one * abilityImpactVFXScale;
     }
+    
     if (audioSource != null && abilityImpactSFX != null) 
         audioSource.PlayOneShot(abilityImpactSFX);
 
@@ -208,17 +308,35 @@ private IEnumerator CoAbility()
     // Stoppage recovery (AI frozen after attack)
     if (abilityStoppageTime > 0f)
     {
+        // Stoppage animation trigger for skills
+        if (animator != null && HasTrigger(skillStoppageTrigger)) animator.SetTrigger(skillStoppageTrigger);
+        
         float stopTimer = abilityStoppageTime;
+        float quarterStoppage = abilityStoppageTime * 0.75f;
+        
         while (stopTimer > 0f)
         {
             stopTimer -= Time.deltaTime;
             if (controller != null && controller.enabled)
                 controller.SimpleMove(Vector3.zero);
+            
+            // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
+            if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
+            {
+                animator.SetBool("Exhausted", true);
+            }
+            
             yield return null;
         }
+        
+        // Clear Exhausted boolean parameter
+        if (animator != null) animator.SetBool("Exhausted", false);
     }
 
-    // Recovery time (AI can move but skill still on cooldown)
+    // End busy state so AI can move during recovery
+    EndAction();
+
+    // Recovery time (AI can move but skill still on cooldown, gradual speed recovery)
     if (abilityRecoveryTime > 0f)
     {
         lastAnySkillRecoveryStart = Time.time;  // For gradual speed
@@ -226,25 +344,42 @@ private IEnumerator CoAbility()
         while (recovery > 0f)
         {
             recovery -= Time.deltaTime;
+            // AI can move during recovery - no movement freeze
             yield return null;
         }
+        lastAnySkillRecoveryEnd = Time.time;
+    }
+    else
+    {
+        lastAnySkillRecoveryEnd = Time.time;
     }
 
     activeAbility = null;
     lastAbilityTime = Time.time;  // Set cooldown timer after all recovery is done
-    lastAnySkillRecoveryEnd = Time.time;  // Global lock timer
-    EndAction();
 }
 ```
 
 ## Advanced Features
 
-### Gradual Speed Recovery
-For realistic post-skill movement:
+### Movement Speed Management
+**CRITICAL**: Speed must return 0 when AI is stopped to prevent animator speed parameter from showing incorrect values.
 
 ```csharp
 protected override float GetMoveSpeed()
 {
+    // Return 0 if AI is busy or has active ability (should be stopped)
+    if (isBusy || globalBusyTimer > 0f || activeAbility != null || basicRoutine != null)
+    {
+        return 0f;
+    }
+    
+    // If AI is idle (not patrolling or chasing), return 0
+    // This prevents speed from showing base speed value when AI is stationary
+    if (aiState == AIState.Idle)
+    {
+        return 0f;
+    }
+    
     float baseSpeed = base.GetMoveSpeed();
     
     // If we're in recovery phase, gradually increase speed from 0.3 to 1.0
@@ -265,6 +400,12 @@ protected override float GetMoveSpeed()
     return baseSpeed;
 }
 ```
+
+**Key Points:**
+- **ALWAYS** check `isBusy`, `globalBusyTimer`, `activeAbility`, `basicRoutine` first
+- **ALWAYS** check `aiState == AIState.Idle` before returning base speed
+- Ensures animator speed parameter shows 0 when AI is stopped
+- Prevents speed from getting "stuck" at base speed value (e.g., patrol speed of 2) when idle
 
 ### Global Post-Skill Lock
 Prevent skill chaining with a mandatory cooldown after ANY skill's recovery:
@@ -347,6 +488,20 @@ private IEnumerator CoCharge()
 {
     BeginAction(AIState.Special1);
     
+    // Capture charge direction before windup (where to charge)
+    var target = blackboard.Get<Transform>("target");
+    Vector3 chargeDirection = transform.forward; // Default to current forward
+    if (target != null)
+    {
+        Vector3 toTarget = new Vector3(target.position.x, transform.position.y, target.position.z) - transform.position;
+        if (toTarget.sqrMagnitude > 0.0001f)
+        {
+            chargeDirection = toTarget.normalized;
+            // Set rotation once before windup
+            transform.rotation = Quaternion.LookRotation(chargeDirection);
+        }
+    }
+    
     // Windup animation trigger
     if (animator != null && HasTrigger(chargeWindupTrigger)) animator.SetTrigger(chargeWindupTrigger);
     // Windup VFX/SFX
@@ -364,19 +519,13 @@ private IEnumerator CoCharge()
         if (chargeVFXScale > 0f) windupFx.transform.localScale = Vector3.one * chargeVFXScale;
     }
     
-    // Face the target during windup (essential for directional charges)
-    var target = blackboard.Get<Transform>("target");
+    // Windup phase - lock rotation (don't face player)
     float windup = chargeWindup;
-    while (windup > 0f && target != null)
+    while (windup > 0f)
     {
         windup -= Time.deltaTime;
-        Vector3 look = new Vector3(target.position.x, transform.position.y, target.position.z);
-        Vector3 lookDir = (look - transform.position);
-        if (lookDir.sqrMagnitude > 0.0001f)
-        {
-            Quaternion targetRot = Quaternion.LookRotation(lookDir);
-            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotationSpeedDegrees * Time.deltaTime);
-        }
+        // Lock rotation during windup
+        transform.rotation = Quaternion.LookRotation(chargeDirection);
         if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
         yield return null;
     }
@@ -399,8 +548,7 @@ private IEnumerator CoCharge()
     // Charge animation trigger
     if (animator != null && HasTrigger(chargeTrigger)) animator.SetTrigger(chargeTrigger);
 
-    // Charge in forward direction (already facing target from windup)
-    Vector3 chargeDirection = transform.forward;
+    // Charge in locked direction (set before windup)
     float chargeTime = chargeDuration;
     HashSet<PlayerStats> hitPlayers = new HashSet<PlayerStats>(); // Track players already hit
     
@@ -437,13 +585,25 @@ private IEnumerator CoCharge()
         if (animator != null && HasTrigger(skillStoppageTrigger)) animator.SetTrigger(skillStoppageTrigger);
         
         float stopTimer = chargeStoppageTime;
+        float quarterStoppage = chargeStoppageTime * 0.75f;
+        
         while (stopTimer > 0f)
         {
             stopTimer -= Time.deltaTime;
             if (controller != null && controller.enabled)
                 controller.SimpleMove(Vector3.zero);
+            
+            // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
+            if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
+            {
+                animator.SetBool("Exhausted", true);
+            }
+            
             yield return null;
         }
+        
+        // Clear Exhausted boolean parameter
+        if (animator != null) animator.SetBool("Exhausted", false);
     }
 
     // Recovery time (AI can move but skill still on cooldown)
@@ -466,12 +626,156 @@ private IEnumerator CoCharge()
 ```
 
 **Key Points for Charge/Dash:**
-- **CRITICAL**: Face target during windup to charge in the right direction
+- **CRITICAL**: Capture charge/leap direction BEFORE windup starts, then lock rotation during windup
+- **CRITICAL**: Lock rotation during windup (don't face player) - rotation is set once before windup and locked
 - **CRITICAL**: Use `HashSet<PlayerStats>` to track hit players and ensure one damage per player
 - Use `controller.Move()` instead of `controller.SimpleMove()` for physics-based movement
-- Charge direction should be `transform.forward` (set during windup facing)
-- Separate animation triggers for windup and charge
-- AI frozen during windup AND during charge (no other actions possible)
+- Charge/leap direction should be calculated from target position before windup, then locked
+- Separate animation triggers for windup, charge/leap, and stoppage
+- AI frozen during windup AND during charge/leap (no other actions possible)
+- **NOTE**: Tree Slam (leap) follows the same pattern as Charge attacks - lock rotation during windup
+
+#### Teleporting Attack
+```csharp
+private void StartTeleportStrike()
+{
+    if (activeAbility != null) return;
+    if (enemyData != null) lastAttackTime = Time.time;
+    
+    // Capture target position when ability is initiated (FIRST LOCATED)
+    var target = blackboard.Get<Transform>("target");
+    Vector3 capturedPos = target != null ? target.position : transform.position;
+    Vector3 capturedForward = target != null ? target.forward : Vector3.forward;
+    
+    activeAbility = StartCoroutine(CoTeleportStrike(capturedPos, capturedForward));
+}
+
+private IEnumerator CoTeleportStrike(Vector3 capturedPos, Vector3 capturedForward)
+{
+    BeginAction(AIState.Special1);
+    
+    // Windup phase - separate trigger, VFX, and SFX
+    if (animator != null && HasTrigger(teleportWindupTrigger))
+        animator.SetTrigger(teleportWindupTrigger);
+    if (audioSource != null && teleportWindupSFX != null) 
+        audioSource.PlayOneShot(teleportWindupSFX);
+    GameObject wind = null;
+    if (teleportWindupVFX != null)
+    {
+        wind = Instantiate(teleportWindupVFX, transform);
+        wind.transform.localPosition = teleportVFXOffset;
+        if (teleportVFXScale > 0f) 
+            wind.transform.localScale = Vector3.one * teleportVFXScale;
+    }
+    
+    // Windup phase - freeze movement (NO facing for teleport attacks)
+    float windup = Mathf.Max(0f, teleportWindup);
+    while (windup > 0f)
+    {
+        windup -= Time.deltaTime;
+        if (controller != null && controller.enabled)
+            controller.SimpleMove(Vector3.zero);
+        yield return null;
+    }
+    if (wind != null) Destroy(wind);
+
+    // Teleport behind captured position (where player was FIRST LOCATED)
+    Vector3 behind = capturedPos - capturedForward * Mathf.Max(0.2f, teleportBehindDistance);
+    behind.y = transform.position.y;
+    
+    // Disable CharacterController to allow position change
+    if (controller != null)
+    {
+        controller.enabled = false;
+        transform.position = behind;
+        controller.enabled = true;
+    }
+    else
+    {
+        transform.position = behind;
+    }
+    
+    // Face captured position
+    Vector3 dir = (capturedPos - transform.position);
+    dir.y = 0f;
+    if (dir.sqrMagnitude > 0.0001f)
+        transform.rotation = Quaternion.LookRotation(dir.normalized);
+        
+    if (teleportImpactVFX != null)
+    {
+        var fx = Instantiate(teleportImpactVFX, transform);
+        fx.transform.localPosition = teleportImpactVFXOffset;
+        if (teleportImpactVFXScale > 0f) fx.transform.localScale = Vector3.one * teleportImpactVFXScale;
+    }
+    if (audioSource != null && teleportImpactSFX != null) audioSource.PlayOneShot(teleportImpactSFX);
+
+    var cols = Physics.OverlapSphere(transform.position, teleportStrikeRadius, LayerMask.GetMask("Player"));
+    foreach (var c in cols)
+    {
+        var ps = c.GetComponentInParent<PlayerStats>();
+        if (ps != null) ps.TakeDamage(teleportStrikeDamage);
+    }
+
+    // Stoppage recovery (AI frozen after attack)
+    if (teleportStoppageTime > 0f)
+    {
+        if (animator != null && HasTrigger(skillStoppageTrigger)) animator.SetTrigger(skillStoppageTrigger);
+        
+        float stopTimer = teleportStoppageTime;
+        float quarterStoppage = teleportStoppageTime * 0.75f;
+        
+        while (stopTimer > 0f)
+        {
+            stopTimer -= Time.deltaTime;
+            if (controller != null && controller.enabled)
+                controller.SimpleMove(Vector3.zero);
+            
+            // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
+            if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
+            {
+                animator.SetBool("Exhausted", true);
+            }
+            
+            yield return null;
+        }
+        
+        // Clear Exhausted boolean parameter
+        if (animator != null) animator.SetBool("Exhausted", false);
+    }
+
+    // End busy state so AI can move during recovery
+    EndAction();
+
+    // Recovery time (AI can move but skill still on cooldown, gradual speed recovery)
+    if (teleportRecoveryTime > 0f)
+    {
+        lastAnySkillRecoveryStart = Time.time;
+        float recovery = teleportRecoveryTime;
+        while (recovery > 0f)
+        {
+            recovery -= Time.deltaTime;
+            yield return null;
+        }
+        lastAnySkillRecoveryEnd = Time.time;
+    }
+    else
+    {
+        lastAnySkillRecoveryEnd = Time.time;
+    }
+
+    activeAbility = null;
+    lastTeleportTime = Time.time;
+}
+```
+
+**Key Points for Teleporting Attacks:**
+- **CRITICAL**: Capture target position and forward direction when ability is initiated (in `StartTeleportStrike()`), NOT during windup
+- **CRITICAL**: Teleport to the CAPTURED position (where player was FIRST LOCATED), not current position
+- **NO facing during windup** - just freeze movement (teleport attacks don't need directional facing during windup)
+- Disable CharacterController before teleporting, re-enable after
+- Teleport behind captured position using `capturedForward`
+- Face captured position after teleport (before applying damage)
+- Apply damage at teleport destination
 
 ## Behavior Tree Structure
 
@@ -533,8 +837,19 @@ Before finalizing any enemy AI:
   - Uses cooldown values from Inspector (don't hardcode)
   
 - [ ] **Movement freezing**: During stoppage/recovery:
-  - Uses `controller.SimpleMove(Vector3.zero)` to halt movement
-  - Stops at least during stoppage phase
+  - Uses `controller.SimpleMove(Vector3.zero)` to halt movement during stoppage
+  - Calls `EndAction()` immediately after stoppage (before recovery)
+  - Recovery allows movement (no movement freeze)
+  
+- [ ] **Basic attack windup**: Basic attacks:
+  - Use `enemyData.attackWindup` for windup duration
+  - Use separate `attackWindupTrigger` and `attackImpactTrigger` if available
+  - Freeze movement during windup, apply damage after windup
+  
+- [ ] **Recovery/stoppage timing**: Special abilities:
+  - Call `EndAction()` immediately after stoppage (allows movement during recovery)
+  - Recovery time allows movement with gradual speed recovery
+  - Set `lastAnySkillRecoveryEnd` after recovery completes
   
 - [ ] **Naming convention**: Use descriptive names:
   - `laughRadius` not `laughRange` (for damage areas)
@@ -547,6 +862,11 @@ Before finalizing any enemy AI:
   ```
   
 - [ ] **Networking safety**: All combat actions should use RPCs (handled in base class)
+  
+- [ ] **Speed management**: `GetMoveSpeed()` override:
+  - MUST check `isBusy`, `globalBusyTimer`, `activeAbility`, `basicRoutine` first
+  - MUST check `aiState == AIState.Idle` before returning base speed
+  - Prevents animator speed parameter from showing incorrect values when stopped
 
 ## Common Pitfalls to Avoid
 
@@ -562,6 +882,14 @@ Before finalizing any enemy AI:
 10. **Using SimpleMove for charges**: Use `controller.Move()` for physics-based charge movement
 11. **No separate windup trigger**: Charge/dash needs separate windup, charge, and stoppage animation triggers
 12. **Basic attacks during charge**: Basic attack MUST check `activeAbility != null` to prevent interruption
+13. **Recovery stops movement**: Recovery time MUST allow movement - call `EndAction()` after stoppage, not after recovery
+14. **Teleporting to current position**: **ALWAYS** capture target position when ability starts, NOT during windup
+15. **Missing basic attack windup**: Basic attacks MUST use `enemyData.attackWindup` and separate triggers if available
+16. **No separate skill triggers**: All skills MUST use separate `abilityWindupTrigger` and `abilityMainTrigger` (not a single trigger)
+17. **Shared VFX offsets/scales**: All skills MUST use separate `abilityWindupVFXOffset/Scale` and `abilityImpactVFXOffset/Scale` (not shared values)
+18. **Speed stuck at base value**: **ALWAYS** check `aiState == AIState.Idle` in `GetMoveSpeed()` to return 0 when idle
+19. **Patrol wait showing speed**: During patrol wait phase, set `aiState = AIState.Idle` and call `controller.SimpleMove(Vector3.zero)` to ensure speed is 0
+20. **Charge/dash rotation lock**: **NEVER** face player during windup - capture direction BEFORE windup, then lock rotation during windup
 
 ## Testing Checklist
 
@@ -581,6 +909,19 @@ Before finalizing any enemy AI:
 - [ ] **Charge/Dash**: Each player only takes damage ONCE during entire charge
 - [ ] **Charge/Dash**: AI cannot perform basic attacks while charging
 - [ ] **Charge/Dash**: Windup, charge, and stoppage animations trigger separately
+- [ ] **Basic Attack**: Windup and impact animations trigger separately
+- [ ] **Basic Attack**: Movement frozen during windup, damage applied after windup
+- [ ] **Teleporting**: Target position captured when ability starts, not during windup
+- [ ] **Teleporting**: AI teleports to where player was FIRST LOCATED, not current position
+- [ ] **Recovery**: AI can move during recovery (no frozen state)
+- [ ] **Recovery**: Speed gradually recovers from 30% to 100% during recovery
+- [ ] **Skills**: All skills use separate windup and impact/main animation triggers
+- [ ] **Skills**: All skills use separate windup and impact VFX offsets/scales
+- [ ] **Skills**: Windup trigger fires during windup phase, impact/main trigger fires when damage is applied
+- [ ] **Speed Management**: Animator speed parameter shows 0 when AI is stopped/idle/busy
+- [ ] **Speed Management**: Speed correctly shows 0 during patrol wait phase (not stuck at patrol speed)
+- [ ] **Speed Management**: Speed correctly shows 0 when AI reaches patrol destination
+- [ ] **Charge/Dash**: Rotation is locked during windup (doesn't continuously face player)
 
 ## Reference Examples
 
@@ -588,5 +929,6 @@ Before finalizing any enemy AI:
 - **Advanced implementation**: `AmomongoAI.cs` - Three abilities with windup/post-stop
 - **Complex implementation**: `BerberokaAI.cs` - Multiple abilities with varying mechanics
 - **Charge/Dash reference**: `TikbalangAI.cs` - Charge attack with windup facing, separate triggers, and one-hit-per-player tracking
+- **Teleporting reference**: `KapreAI.cs` - Teleport strike with position capture, separate triggers, and recovery system
 
 Apply to: `Assets/Enemies/**/*AI.cs`

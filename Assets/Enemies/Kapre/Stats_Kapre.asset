@@ -15,12 +15,13 @@ MonoBehaviour:
   enemyType: 15
   enemyName: Kapre
   maxHealth: 400
-  basicDamage: 10
-  moveSpeed: 3.5
-  chaseSpeed: 2.5
-  rotationSpeedDegrees: 360
+  basicDamage: 20
+  moveSpeed: 1.5
+  chaseSpeed: 3
+  rotationSpeedDegrees: 700
   backoffSpeedMultiplier: 0.6
-  attackRange: 2.2
+  attackRange: 4.3
+  attackWindup: 0.85
   attackCooldown: 1.25
   attackMoveLock: 0.35
   detectionRange: 12

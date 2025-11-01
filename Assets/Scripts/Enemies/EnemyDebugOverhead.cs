@@ -76,7 +76,17 @@ public class EnemyDebugOverhead : MonoBehaviour
 			}
 			else
 			{
-				tmp.text = header + $"\nCD basic:{basicCd:F1}";
+				// If this is a Kapre, show ability cooldowns
+				var kapre = enemy as KapreAI;
+				if (kapre != null)
+				{
+					string cds = $"CD basic:{basicCd:F1}  vanish:{kapre.VanishCooldownRemaining:F1}  treeslam:{kapre.TreeSlamCooldownRemaining:F1}";
+					tmp.text = header + "\n" + cds;
+				}
+				else
+				{
+					tmp.text = header + $"\nCD basic:{basicCd:F1}";
+				}
 			}
 		}
 	}

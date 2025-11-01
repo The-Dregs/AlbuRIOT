@@ -44,7 +44,8 @@ public class AmomongoAI : BaseEnemyAI
     public float slamStopDuration = 0.25f;
 
     [Header("Basic Attack Tuning")]
-    public float basicWindup = 0.3f;
+    [Tooltip("Override basic windup. If 0, uses enemyData.attackWindup")]
+    public float basicWindup = 0f; // 0 = use enemyData.attackWindup
     public float basicPostStop = 0.2f;
 
     [Header("Animation")]
@@ -111,6 +112,18 @@ public class AmomongoAI : BaseEnemyAI
     // Movement boost during berserk
     protected override float GetMoveSpeed()
     {
+        // Return 0 if AI is busy or has active ability (should be stopped)
+        if (isBusy || globalBusyTimer > 0f || activeAbility != null || basicRoutine != null)
+        {
+            return 0f;
+        }
+        
+        // If AI is idle (not patrolling or chasing), return 0
+        if (aiState == AIState.Idle)
+        {
+            return 0f;
+        }
+        
         float baseSpeed = base.GetMoveSpeed();
         return isBerserk ? baseSpeed * berserkMoveMultiplier : baseSpeed;
     }
@@ -128,9 +141,17 @@ public class AmomongoAI : BaseEnemyAI
     private IEnumerator CoBasicAttack(Transform target)
     {
         BeginAction(AIState.BasicAttack);
-        if (animator != null && HasTrigger(attackTrigger)) animator.SetTrigger(attackTrigger);
+        
+        // Windup animation trigger
+        if (animator != null)
+        {
+            if (HasTrigger(attackWindupTrigger))
+                animator.SetTrigger(attackWindupTrigger);
+            else if (HasTrigger(attackTrigger))
+                animator.SetTrigger(attackTrigger);
+        }
 
-        float wind = Mathf.Max(0f, basicWindup);
+        float wind = Mathf.Max(0f, basicWindup > 0f ? basicWindup : enemyData.attackWindup);
         while (wind > 0f)
         {
             wind -= Time.deltaTime;
@@ -148,6 +169,10 @@ public class AmomongoAI : BaseEnemyAI
             }
             yield return null;
         }
+
+        // Impact animation trigger
+        if (animator != null && HasTrigger(attackImpactTrigger))
+            animator.SetTrigger(attackImpactTrigger);
 
         // Apply damage
         float radius = Mathf.Max(0.8f, enemyData.attackRange);

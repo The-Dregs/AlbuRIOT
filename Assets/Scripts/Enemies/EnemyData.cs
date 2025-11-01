@@ -18,6 +18,7 @@ public class EnemyData : ScriptableObject
     public float backoffSpeedMultiplier = 0.6f;
     [Header("Combat")]
     public float attackRange = 2.2f;
+    public float attackWindup = 0.3f;
     public float attackCooldown = 1.25f;
     public float attackMoveLock = 0.35f;
     public float detectionRange = 12f;

@@ -14,7 +14,9 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
     [Header("Animation")]
     public Animator animator;
     public string speedParam = "Speed";
-    public string attackTrigger = "Attack";
+    public string attackTrigger = "Attack"; // Legacy: single trigger OR use separate windup/impact triggers
+    public string attackWindupTrigger = "AttackWindup"; // Optional: separate windup trigger
+    public string attackImpactTrigger = "AttackImpact"; // Optional: separate impact trigger
     public string hitTrigger = "Hit";
     public string dieTrigger = "Die";
     public string isDeadBool = "IsDead";
@@ -205,9 +207,28 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
     {
         if (animator != null && HasFloatParam(speedParam))
         {
+            // Always check GetMoveSpeed() first - it returns 0 when AI should be stopped
+            // This catches: isBusy, globalBusyTimer, activeAbility, basicRoutine, aiState==Idle (in derived classes)
+            float expectedSpeed = GetMoveSpeed();
+            if (expectedSpeed <= 0f)
+            {
+                animator.SetFloat(speedParam, 0f);
+                return;
+            }
+            
+            // If AI should be moving, use actual velocity for smooth animation
             Vector3 velocity = controller != null ? controller.velocity : Vector3.zero;
             float planarSpeed = new Vector3(velocity.x, 0f, velocity.z).magnitude;
-            animator.SetFloat(speedParam, planarSpeed);
+            
+            // If actual velocity is very low or AI is idle, clamp to 0
+            if (planarSpeed < 0.01f || aiState == AIState.Idle)
+            {
+                animator.SetFloat(speedParam, 0f);
+            }
+            else
+            {
+                animator.SetFloat(speedParam, planarSpeed);
+            }
         }
     }
     
@@ -321,7 +342,11 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
             {
                 Vector3 dirNorm = direction.sqrMagnitude > 0.0001f ? direction.normalized : transform.forward;
                 if (controller != null && controller.enabled)
-                    controller.SimpleMove(dirNorm * GetMoveSpeed());
+                {
+                    float speed = GetMoveSpeed();
+                    if (speed <= 0f) speed = 0f; // Ensure movement respects busy state
+                    controller.SimpleMove(dirNorm * speed);
+                }
                 Vector3 pushLookTarget = new Vector3(target.position.x, transform.position.y, target.position.z);
                 Vector3 pushDirToLook = (pushLookTarget - transform.position);
                 if (pushDirToLook.sqrMagnitude > 0.0001f)
@@ -337,6 +362,7 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
                 Vector3 fwd = direction.sqrMagnitude > 0.0001f ? direction.normalized : transform.forward;
                 Vector3 tangent = Vector3.Cross(Vector3.up, fwd);
                 float speed = GetMoveSpeed() * Mathf.Clamp(orbitSpeedMultiplier, 0.1f, 2f);
+                if (speed <= 0f) speed = 0f; // Ensure orbit respects busy state
                 if (controller != null && controller.enabled)
                     controller.SimpleMove(tangent * speed);
                 // face target while orbiting
@@ -357,7 +383,11 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
         
         direction.Normalize();
         if (controller != null && controller.enabled)
-            controller.SimpleMove(direction * GetMoveSpeed());
+        {
+            float speed = GetMoveSpeed();
+            if (speed <= 0f) speed = 0f; // Ensure movement respects busy state
+            controller.SimpleMove(direction * speed);
+        }
             
         // Rotate towards target
         Vector3 lookTarget = new Vector3(target.position.x, transform.position.y, target.position.z);
@@ -407,6 +437,10 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
         
         if (patrolTarget == Vector3.zero || Vector3.Distance(flatPos, flatTarget) < 0.5f)
         {
+            // During wait phase, stop movement and set state to Idle
+            if (controller != null && controller.enabled)
+                controller.SimpleMove(Vector3.zero);
+            
             if (patrolWaitTimer <= 0f)
             {
                 patrolTarget = spawnPoint + Random.insideUnitSphere * enemyData.patrolRadius;
@@ -416,7 +450,7 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
             else
             {
                 patrolWaitTimer -= Time.deltaTime;
-                aiState = AIState.Patrol;
+                aiState = AIState.Idle; // Set to Idle during wait so speed is 0
                 return NodeState.Running;
             }
         }
@@ -430,8 +464,17 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
                 direction.Normalize();
                 if (controller != null && controller.enabled)
                 {
-                    float pSpeed = patrolSpeed > 0f ? patrolSpeed : GetMoveSpeed() * 0.75f;
-                    controller.SimpleMove(direction * pSpeed);
+                    float pSpeed = GetMoveSpeed() * 0.75f;
+                    if (pSpeed <= 0f) 
+                    {
+                        pSpeed = 0f; // Ensure patrol respects busy state
+                        controller.SimpleMove(Vector3.zero); // Explicitly stop if speed is 0
+                    }
+                    else
+                    {
+                        if (patrolSpeed > 0f) pSpeed = Mathf.Min(pSpeed, patrolSpeed); // Use patrolSpeed as max if set
+                        controller.SimpleMove(direction * pSpeed);
+                    }
                 }
                 Vector3 look = new Vector3(patrolTarget.x, transform.position.y, patrolTarget.z);
                 Vector3 lookDir = (look - transform.position);
@@ -442,6 +485,13 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
                 }
                 aiState = AIState.Patrol;
                 return NodeState.Running;
+            }
+            else
+            {
+                // Reached target, stop movement
+                if (controller != null && controller.enabled)
+                    controller.SimpleMove(Vector3.zero);
+                aiState = AIState.Idle; // Set to Idle when at destination
             }
         }
         return NodeState.Success;

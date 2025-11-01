@@ -1,0 +1,116 @@
+---
+alwaysApply: true
+---
+title: AlbuRIOT Cursor Rules (Unity/Photon)
+
+applyTo: '**'
+
+# Scope and guardrails
+- Do not edit or move third‑party or generated content: `Assets/Photon/`, `Assets/TextMesh Pro/`, `Assets/Imported Assets/`, `Library/`, `Temp/`, `Packages/`, any `*.meta`, any `obj/` or `bin/`.
+- Prefer adding new code under `Assets/Scripts/` with domain folders (`Player/`, `Enemies/`, `Managers/`, `UI/`, `Combat/`, `NPC/`, `Map/`, `Inventory/`, `Items/`, `Equipments/`, `VFX/`, `Data/`).
+- Unity assignments required (prefabs, references, layers, inputs): always output a short numbered checklist under a "Unity setup" subheading after code.
+
+# Coding style (C# Unity)
+- Use `[SerializeField] private` fields for inspector exposure. Avoid public fields unless necessary for APIs.
+- Use `PascalCase` for classes/methods, `camelCase` for fields/locals, `SCREAMING_SNAKE_CASE` for constants.
+- Favor composition over inheritance; avoid deep MonoBehaviour inheritance.
+- Use coroutines for frame-based flows and `async` only for I/O. Never block the main thread.
+- Add concise log messages for player/enemy actions behind a toggleable flag, e.g., `bool enableDebugLogs`.
+- Maintain multiplayer-safety: no static mutable shared state for gameplay; use instance/scoped data.
+
+# Networking (Photon PUN)
+- **ALWAYS use RPCs for multiplayer operations**: Any action that affects gameplay (items, combat, quests, UI state) MUST use `[PunRPC]` methods to ensure it works correctly in both online multiplayer and offline single-player modes.
+- Only access Photon APIs from gameplay code via thin adapters in `Assets/Scripts/Networking/`.
+- Validate authority: only owners mutate networked state; others read-only. Guard with `photonView.IsMine`.
+- Synchronize minimal state; prefer RPCs/events for actions over continuous property syncs.
+ - AI authority: only MasterClient (host) ticks AI/BT; clients disable AI updates and read replicated state.
+ - Powers/rituals: replicate start/stop via RPCs; authoritative owner handles collisions/effects with lag compensation.
+ - Late join: ensure seed, POI state, objectives/boss phase are synced on entry; brief add-spawn pause is acceptable.
+- **Spawning/Destruction**: Always use `PhotonNetwork.Instantiate()` / `PhotonNetwork.Destroy()` when in a networked room, falling back to regular Unity methods for offline mode.
+- **Cross-client synchronization**: When the local player performs an action that other players should see (item pickup, damage, quest update), send an RPC to `RpcTarget.Others`.
+- **Example pattern**:
+  ```csharp
+  if (photonView != null && PhotonNetwork.IsConnected) {
+      photonView.RPC("RPC_ActionName", RpcTarget.Others, parameters);
+  }
+  // Always execute locally too
+  DoLocalAction();
+  ```
+
+# AI and Behavior Trees
+- **Enemies**: Enemy AI lives under `Assets/Scripts/Enemies/`. Behavior tree nodes under `Assets/Scripts/Enemies/BehaviorTree/`.
+- Keep node classes pure and side-effect free except where explicitly intended; tick methods should be deterministic given inputs.
+- Separate sensing (perception), decision (BT/utility), and actuation (movement/attacks) into distinct components.
+- Follow project BT semantics (Sequence/Selector) per docs; moves use cooldowns, busy windows, and effective range.
+
+# Player systems
+- **Core Player**: `PlayerStats`, `ThirdPersonController`, `ThirdPersonCameraOrbit`, `PlayerCombat`, `PlayerAnimatorSync`
+- **UI/Interaction**: `PlayerUIController`, `PlayerStatsUI`, `PlayerInteractHUD`, `PlayerPickupInteractor`, `PlayerSkillSlots`, `PlayerAreaPresenceUI`, `PlayerQuestArrow`, `PlayerQuestRelay`
+- Use `photonView.IsMine` guards to ensure only local player executes input/camera logic.
+
+# Combat systems
+- **Abilities**: `AbilityBase`, `TikbalangStompAbility` under `Assets/Scripts/Combat/Abilities/`
+- **Combat managers**: `PlayerCombat`, `DebuffManager`, `PowerStealManager`, `DamageRelay`, `EnemyDamageRelay`, `StatusEffectRelay`
+- **VFX**: `VFXManager` under `Assets/Scripts/VFX/`
+- All combat actions must use RPCs for synchronization.
+
+# NPC and trading systems
+- **Dialogue**: `NPCDialogueManager`, `NPCDialogueTrigger`, `NPCDialogueData`, `DialogueAreaTrigger`
+- **Trading**: `NunoShopManager` (singleton), `NunoMerchantTrigger`, `NunoTradeSlotUI`, `ShopTradeData`, `ShopTradeJsonLoader`
+- NPC interactions are per-player via Screen Space UI; trades sync via Inventory RPCs.
+
+# Inventory and items
+- **Inventory**: `Inventory` (with `FindLocalInventory()`), `InventoryUI`, `ItemSlotUI`, `ItemManager`, `ItemDatabase`, `ItemPickup`, `NetworkItemPickup`
+- **Equipment**: `EquipmentManager`, `EquipmentPickup` under `Assets/Scripts/Equipments/`
+- **Item data**: `ItemData`, `QuestData`, `ShrineData`, `DebuffData`, `MovesetData`, `SpecialMoveData` under `Assets/Scripts/Items/`
+- All inventory operations must be multiplayer-safe with RPCs.
+
+# Scene and systems
+- **Managers**: Core game systems live in `Assets/Scripts/Managers/`:
+  - **Core**: `GameManager`, `NetworkManager`, `AlbuRIOTIntegrationManager`, `DataTableManager`
+  - **Gameplay**: `QuestManager`, `ShrineManager`, `ItemManager`, `MovesetManager`, `EnemyManager`
+  - **Combat**: `DebuffManager`, `PowerStealManager`, `VFXManager`
+  - **UI/Flow**: `CutsceneManager`, `TutorialManager`, `DialogueManager`, `StoryManager`, `LoadingScreenManager`, `LobbyManager`, `PrologueManager`
+  - **NPC/Trade**: `NPCDialogueManager`, `NunoShopManager`, `ShopTradeJsonLoader`
+  - **Map/Terrain**: `TerrainGenerator`, `PerlinEnemySpawner`, `MapResourcesGenerator`, `TerrainEvaluationRunner`, `TerrainMetricsReporter`
+  - **Scene/Triggers**: `SceneLoader`, `PlayerSpawnManager`, `QuestAreaTrigger`, `TutorialTrigger`, `SceneTransitionTrigger`, `TutorialSpawnManager`, `TriggerScript`, `QuestJsonLoader`
+- Avoid `FindObjectOfType` in update loops; cache references. Use `Inventory.FindLocalInventory()` for multiplayer-safe inventory access.
+- Input uses the Unity Input System from `InputSystem_Actions.inputactions`. Do not hardcode keycodes.
+- UI uses TextMesh Pro; do not use legacy `UnityEngine.UI.Text`.
+- **Data**: Create ScriptableObjects under `Assets/Resources/` (Items, Quests, Trades, Dialogue). JSON loaders: `QuestJsonLoader`, `ShopTradeJsonLoader`.
+
+# UI systems
+- **Input/Cursor**: `LocalInputLocker` (singleton, per-player input control), `LocalUIManager` (UI state management)
+- **HUD**: `QuestHUD`, `QuestListUI`, `PlayerUIController`, `PlayerStatsUI`, `PlayerInteractHUD`, `AttackCooldownUI`, `DamageOverlayUI`, `DamageText`, `ObjectiveArrow`
+- **Dialogue**: `DialogueData`, `Billboard`, `FontChanger`
+- **Menus**: `PauseMenuController`, `ProloguePauseMenu`, `MainSceneBackButton`, `BackgroundVideoController`
+- **Debug**: `AbilityDebugUI`, `AbilityDebugUISpawner`, `GameTimeDebug`
+- All UI must use per-player canvases (Screen Space - Overlay) or World Space with proper PhotonView ownership.
+
+# Map and terrain
+- **Terrain**: `TerrainGenerator`, `TerrainEvaluationRunner`, `TerrainMetricsReporter`, `RegenerateOnSceneLoad`
+- **Enemy spawning**: `PerlinEnemySpawner` (MasterClient authority), `EnemyManager`, `EnemyFactory`
+- **Resources**: `MapResourcesGenerator`
+
+# Performance and safety
+- No allocations in `Update`/`FixedUpdate` hot paths; cache lists and use static buffers if safe.
+- Use `Physics` queries with layer masks and pre-allocated results where possible.
+- Guard all Unity callbacks against null refs; prefer early returns.
+- Pool enemies and VFX where feasible; prefer async scene loads and culling for heavy content.
+
+# Documentation and references (flexible paths)
+- Resolve docs by checking in order: `Assets/docs/`, then `ALBURIOT/Assets/docs/`, then `docs/` at repo root, then root-level files.
+- **Core docs**: `CHAPTER 1 - 3.md` (canonical thesis basis), `CHAPTER 3.md` (game design chapter), `ALBURIOT_GDD.md` (derived GDD)
+- **Game design**: `ENEMY_MOVES.md` (enemy stats/formulas), `ENEMY MOVESETS.TXT` (animation/VFX notes), `POWERSTEALING_MOVES.md` (power-steal mechanics), `ALGORITHMS.md` (math/definitions), `FORMULAS.txt` (plain formulas), `GDLC.txt` (lifecycle plan)
+- **Setup guides**: `NUNO_TRADING_SETUP.md`, `NUNO_TRADING_QUICKSTART.md`
+- When you rely on a document, reference it by its resolved relative path in your answer.
+
+# What to output
+- Provide only the edits required, with minimal unrelated changes. Keep existing indentation and formatting.
+- After code, include “Unity setup” steps if inspector/prefab work is required.
+- If touching multiple systems, summarize risks and test steps briefly.
+
+# Things to avoid
+- Do not reformat files or rename symbols unless asked.
+- Do not add new dependencies/packages without explicit instruction.
+- Do not modify `.meta` files or asset import settings unless requested.

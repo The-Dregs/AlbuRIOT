@@ -1,0 +1,41 @@
+{
+  "trades": [
+    {
+      "tradeName": "Healing Aloe Exchange",
+      "description": "Trade aloe for a bolo knife.",
+      "requiredItemNames": ["Aloe Vera"],
+      "requiredQuantities": [3],
+      "rewardItemName": "Bolo Knife",
+      "rewardQuantity": 1,
+      "maxUses": -1,
+      "requiresUnlock": false,
+      "requiredShrineIds": [],
+      "requiredQuestIds": []
+    },
+    {
+      "tradeName": "Lily Offering",
+      "description": "Trade lilies for healing supplies.",
+      "requiredItemNames": ["Lunar Lillies"],
+      "requiredQuantities": [5],
+      "rewardItemName": "Aloe Vera",
+      "rewardQuantity": 3,
+      "maxUses": -1,
+      "requiresUnlock": false,
+      "requiredShrineIds": [],
+      "requiredQuestIds": []
+    },
+    {
+      "tradeName": "Herbal Bundle",
+      "description": "Combine different herbs for a powerful item.",
+      "requiredItemNames": ["Aloe Vera", "Lunar Lillies"],
+      "requiredQuantities": [2, 2],
+      "rewardItemName": "Geranium",
+      "rewardQuantity": 5,
+      "maxUses": -1,
+      "requiresUnlock": true,
+      "requiredShrineIds": ["FirstShrine"],
+      "requiredQuestIds": ["2"]
+    }
+  ]
+}
+

@@ -1,0 +1,88 @@
+{
+  "questName": "",
+  "description": "",
+  "requiresAllObjectives": true,
+  "autoAdvanceObjectives": true,
+  "startObjectiveIndex": 0,
+  "objectives": [
+    {
+      "objectiveName": "Atonement at the mound",
+      "description": "Collect herbs in the wild.",
+      "objectiveType": "Collect",
+      "targetId": "Geranium",
+      "requiredCount": 3,
+      "collectItemIds": ["Geranium"],
+      "collectQuantities": [3]
+    },
+    {
+      "objectiveName": "Perform the Cleansing Ritual",
+      "description": "Use the herbs at the broken mound to perform the ritual.",
+      "objectiveType": "ReachArea",
+      "targetId": "BrokenMound",
+      "requiredCount": 1
+    },
+    {
+      "objectiveName": "Unlock Nuno Trading",
+      "description": "Talk to Nuno sa Punso to gain trading access.",
+      "objectiveType": "TalkTo",
+      "targetId": "NunoSaPunso",
+      "requiredCount": 1
+    },
+    {
+      "objectiveName": "Scout the wrecks",
+      "description": "Find the shipwreck",
+      "objectiveType": "ReachArea",
+      "targetId": "ShipWreck",
+      "requiredCount": 1
+    },
+    {
+      "objectiveName": "Find the ship remnants",
+      "description": "Search 3 wreck clusters for ship remnants.",
+      "objectiveType": "Collect",
+      "targetId": "ShipRemnant",
+      "requiredCount": 3
+    },
+    {
+      "objectiveName": "Clear chokepoints",
+      "description": "Reach each chokepoint and defeat enemies.",
+      "objectiveType": "ReachArea",
+      "targetId": "Chokepoint",
+      "requiredCount": 1
+    },
+    {
+      "objectiveName": "Miniboss: Defeat Berberoka",
+      "description": "Defeat Berberoka at the camp.",
+      "objectiveType": "Kill",
+      "targetId": "Berberoka",
+      "requiredCount": 1
+    },
+    {
+      "objectiveName": "Breach the shipyard",
+      "description": "Enter the shipyard area.",
+      "objectiveType": "ReachArea",
+      "targetId": "Shipyard",
+      "requiredCount": 1
+    },
+    {
+      "objectiveName": "Seize the boat and depart",
+      "description": "Clear the colonizer deck.",
+      "objectiveType": "Kill",
+      "targetId": "ColonizerDeck",
+      "requiredCount": 1
+    },
+    {
+      "objectiveName": "Tow from shallows",
+      "description": "Reach the shallows to prepare for departure.",
+      "objectiveType": "ReachArea",
+      "targetId": "Shallows",
+      "requiredCount": 1
+    },
+    {
+      "objectiveName": "All aboard to end the chapter",
+      "description": "All players must reach the ship exit.",
+      "objectiveType": "ReachArea",
+      "targetId": "ShipExit",
+      "requiredCount": 1
+    }
+  ]
+}

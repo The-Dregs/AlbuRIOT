@@ -1,0 +1,36 @@
+---
+alwaysApply: true
+---
+title: AlbuRIOT Documentation Map
+
+applyTo: '**'
+
+# Canonical document locations (with fallbacks)
+- Resolve docs by checking these bases in order and using the first that exists:
+  1) `Assets/docs/`
+  2) `ALBURIOT/Assets/docs/`
+  3) `docs/` (repo root)
+  4) repo root files (for individually moved files)
+
+- Expected files in `Assets/docs/` (resolve via the rules above):
+  - **Core design**: `CHAPTER 1 - 3.md` (canonical thesis basis), `CHAPTER 3.md` (game design chapter), `ALBURIOT_GDD.md` (derived GDD)
+  - **Game mechanics**: `ENEMY_MOVES.md` (enemy stats/formulas), `ENEMY MOVESETS.TXT` (animation/VFX notes), `POWERSTEALING_MOVES.md` (power-steal mechanics), `ALGORITHMS.md` (math/definitions), `FORMULAS.txt` (plain formulas), `GDLC.txt` (lifecycle plan)
+  - **Setup guides**: `NUNO_TRADING_SETUP.md` (comprehensive trading system setup), `NUNO_TRADING_QUICKSTART.md` (quick trading setup)
+
+# Referencing rules
+- Use `CHAPTER 3.md` for chapter beats, objectives, and placements; treat `CHAPTER 1 - 3.md` as the canonical basis if conflicts arise.
+- Cite documents by their resolved relative path, e.g., `Assets/docs/CHAPTER 3.md` or `docs/CHAPTER 3.md`.
+- If a document is missing, ask to create it under the highest-priority base that exists.
+ - For enemy stats and timing, cite `ENEMY_MOVES.md` (numbers) and `ENEMY MOVESETS.TXT` (animation/VFX intent).
+ - For power-steal mechanics and player abilities, cite `POWERSTEALING_MOVES.md`.
+ - For terrain/spawn/BT formulas, cite `ALGORITHMS.md` (math) or `FORMULAS.txt` (plain) as appropriate.
+ - When summarizing design pillars, chapters, or MVP scope, cite `CHAPTER 3.md`; note it is derived from `CHAPTER 1 - 3.md` and should stay in sync.
+
+# Sync notes
+- Game mechanics docs (`CHAPTER 3.md`, `ENEMY_MOVES.md`, `ENEMY MOVESETS.TXT`, `ALGORITHMS.md`, `FORMULAS.txt`, `GDLC.txt`, `POWERSTEALING_MOVES.md`) are maintained in lockstep with `CHAPTER 1 - 3.md` (canonical basis).
+- If discrepancies occur, defer to `CHAPTER 1 - 3.md` then update derivative docs accordingly.
+- Setup guides (`NUNO_TRADING_SETUP.md`, `NUNO_TRADING_QUICKSTART.md`) reflect the current implementation in `Assets/Scripts/NPC/` and `Assets/Resources/Trades/`.
+
+# File hygiene
+- Use short, ASCII-only filenames. Avoid spaces where possible; prefer `-` or `_`.
+- Keep documents in Markdown or plain text for easy diffing.

@@ -78,4 +78,31 @@ Assets/AddressableAssetsData/*/build*/*
 crashlytics-build.properties
 fabric.properties
 
+# Documentation folders
 docs/
+Assets/docs/
+ALBURIOT/Assets/docs/
+
+# Important build/binary files
+*.exe
+*.dll
+*.so
+*.dylib
+*.bundle
+
+# Project-specific important ignores
+*.cache
+*.lock
+*.tmp
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Secrets/API keys (if any)
+*.key
+*.pem
+secrets.json
+.env
+.env.local

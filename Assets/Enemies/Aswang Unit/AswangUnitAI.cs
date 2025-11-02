@@ -2,70 +2,46 @@ using UnityEngine;
 using Photon.Pun;
 using AlbuRIOT.AI.BehaviorTree;
 using System.Collections;
+using System.Collections.Generic;
 
 [RequireComponent(typeof(CharacterController))]
 [DisallowMultipleComponent]
 public class AswangUnitAI : BaseEnemyAI
 {
-    [Header("Pounce Attack")]
+    [Header("Pounce Attack (Leap)")]
     public int pounceDamage = 24;
     public float pounceWindup = 0.4f;
     public float pounceCooldown = 5.5f;
     public float pounceLeapDistance = 6f;
-    public float pounceLeapSpeed = 12f;
+    public float pounceLeapDuration = 0.5f;
+    public float pounceLeapHeight = 1.2f;
     public float pounceHitRadius = 1.5f;
-    public GameObject pounceVFX; // windup
-    public AudioClip pounceSFX;  // windup
-    public GameObject pounceImpactVFX; // activation at landing
-    public Vector3 pounceVFXOffset = Vector3.zero;
-    public float pounceVFXScale = 1.0f;
+    public GameObject pounceWindupVFX;
+    public GameObject pounceImpactVFX;
+    public Vector3 pounceWindupVFXOffset = Vector3.zero;
+    public float pounceWindupVFXScale = 1.0f;
     public Vector3 pounceImpactVFXOffset = Vector3.zero;
     public float pounceImpactVFXScale = 1.0f;
+    public AudioClip pounceWindupSFX;
     public AudioClip pounceImpactSFX;
-
-    [Header("Shadow Swarm")]
-    public int swarmTickDamage = 5;
-    public float swarmTickInterval = 0.5f;
-    public float swarmDuration = 3.0f;
-    public float swarmCooldown = 7.5f;
-    public float swarmRadius = 3.5f;
-    public float swarmWindup = 0.6f;
-    public GameObject swarmVFX; // windup
-    public AudioClip swarmSFX;  // windup
-    public GameObject swarmImpactVFX; // activation (when DoT starts)
-    public Vector3 swarmVFXOffset = Vector3.zero;
-    public float swarmVFXScale = 1.0f;
-    public Vector3 swarmImpactVFXOffset = Vector3.zero;
-    public float swarmImpactVFXScale = 1.0f;
-    public AudioClip swarmImpactSFX;
+    public string pounceWindupTrigger = "PounceWindup";
+    public string pounceTrigger = "Pounce";
+    public string skillStoppageTrigger = "SkillStoppage";
 
     [Header("Skill Selection Tuning")]
-    public float pouncePreferredMinDistance = 3f;
-    public float pouncePreferredMaxDistance = 8f;
-    [Range(0f, 1f)] public float pounceSkillWeight = 0.7f;
-    [SerializeField] private float pounceStoppageTime = 1f;
-    public float swarmPreferredMinDistance = 2.5f;
-    public float swarmPreferredMaxDistance = 5.5f;
-    [Range(0f, 1f)] public float swarmSkillWeight = 0.85f;
-    [SerializeField] private float swarmStoppageTime = 1f;
-    [Header("Spacing")]
-    public float preferredDistance = 2.7f;
-    [Range(0.1f,2f)] public float backoffSpeedMultiplier = 0.8f;
-    [Header("Facing")]
-    [Range(1f,60f)] public float specialFacingAngle = 20f;
-
-    [Header("Animation")]
-    public string pounceTrigger = "Pounce";
-    public string swarmTrigger = "Swarm";
+    public float pounceStoppageTime = 1f;
+    public float pounceRecoveryTime = 0.5f;
 
     // Runtime state
     private float lastPounceTime = -9999f;
-    private float lastSwarmTime = -9999f;
-    private GameObject activeSwarmVFX;
-    private Coroutine swarmCoroutine;
+    private float lastAnySkillRecoveryEnd = -9999f;
+    private float lastAnySkillRecoveryStart = -9999f;
     private AudioSource audioSource;
+    private Coroutine activeAbility;
+    private Coroutine basicRoutine;
 
-    #region Initialization
+    // Debug accessors
+    public float PounceCooldownRemaining => Mathf.Max(0f, pounceCooldown - (Time.time - lastPounceTime));
 
     protected override void InitializeEnemy()
     {
@@ -81,11 +57,8 @@ public class AswangUnitAI : BaseEnemyAI
         var moveToTarget = new ActionNode(blackboard, MoveTowardsTarget, "move_to_target");
         var targetInAttack = new ConditionNode(blackboard, TargetInAttackRange, "in_attack_range");
         var basicAttack = new ActionNode(blackboard, () => { PerformBasicAttack(); return NodeState.Success; }, "basic");
-
         var canPounce = new ConditionNode(blackboard, CanPounce, "can_pounce");
         var doPounce = new ActionNode(blackboard, () => { StartPounce(); return NodeState.Success; }, "pounce");
-        var canSwarm = new ConditionNode(blackboard, CanSwarm, "can_swarm");
-        var doSwarm = new ActionNode(blackboard, () => { StartSwarm(); return NodeState.Success; }, "swarm");
 
         behaviorTree = new Selector(blackboard, "root")
             .Add(
@@ -95,7 +68,6 @@ public class AswangUnitAI : BaseEnemyAI
                     targetInDetection,
                     new Selector(blackboard, "attack_opts").Add(
                         new Sequence(blackboard, "pounce_seq").Add(canPounce, doPounce),
-                        new Sequence(blackboard, "swarm_seq").Add(canSwarm, doSwarm),
                         new Sequence(blackboard, "basic_seq").Add(targetInAttack, basicAttack),
                         moveToTarget
                     )
@@ -104,21 +76,48 @@ public class AswangUnitAI : BaseEnemyAI
             );
     }
 
-    #endregion
-
-    #region BaseEnemyAI Overrides
-
     protected override void PerformBasicAttack()
     {
+        if (basicRoutine != null) return;
+        if (activeAbility != null) return;
+        if (isBusy || globalBusyTimer > 0f) return;
         if (enemyData == null) return;
         if (Time.time - lastAttackTime < enemyData.attackCooldown) return;
 
         var target = blackboard.Get<Transform>("target");
         if (target == null) return;
 
-        if (animator != null && HasTrigger(attackTrigger)) animator.SetTrigger(attackTrigger);
+        basicRoutine = StartCoroutine(CoBasicAttack(target));
+    }
 
-        // Apply damage
+    private IEnumerator CoBasicAttack(Transform target)
+    {
+        BeginAction(AIState.BasicAttack);
+
+        // Windup animation trigger
+        if (animator != null)
+        {
+            if (HasTrigger(attackWindupTrigger))
+                animator.SetTrigger(attackWindupTrigger);
+            else if (HasTrigger(attackTrigger))
+                animator.SetTrigger(attackTrigger);
+        }
+
+        // Windup phase - freeze movement during windup
+        float windup = Mathf.Max(0f, enemyData.attackWindup);
+        while (windup > 0f)
+        {
+            windup -= Time.deltaTime;
+            if (controller != null && controller.enabled)
+                controller.SimpleMove(Vector3.zero);
+            yield return null;
+        }
+
+        // Impact animation trigger
+        if (animator != null && HasTrigger(attackImpactTrigger))
+            animator.SetTrigger(attackImpactTrigger);
+
+        // Apply damage after windup
         float radius = Mathf.Max(0.8f, enemyData.attackRange);
         Vector3 center = transform.position + transform.forward * (enemyData.attackRange * 0.5f);
         var cols = Physics.OverlapSphere(center, radius, LayerMask.GetMask("Player"));
@@ -128,55 +127,35 @@ public class AswangUnitAI : BaseEnemyAI
             if (ps != null) ps.TakeDamage(enemyData.basicDamage);
         }
 
+        // Post-stop using attackMoveLock duration
+        float post = Mathf.Max(0.1f, enemyData.attackMoveLock);
+        while (post > 0f)
+        {
+            post -= Time.deltaTime;
+            if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+            yield return null;
+        }
+
         lastAttackTime = Time.time;
         attackLockTimer = enemyData.attackMoveLock;
+        basicRoutine = null;
+        EndAction();
     }
 
     protected override bool TrySpecialAbilities()
     {
-        if (isBusy) return false;
-        var target = blackboard.Get<Transform>("target");
-        if (target == null) return false;
-        float dist = Vector3.Distance(transform.position, target.position);
-        bool facingTarget = IsFacingTarget(target, specialFacingAngle);
-        bool inPounceRange = dist >= pouncePreferredMinDistance && dist <= pouncePreferredMaxDistance;
-        bool inSwarmRange = dist >= swarmPreferredMinDistance && dist <= swarmPreferredMaxDistance;
-        float pounceMid = (pouncePreferredMinDistance + pouncePreferredMaxDistance) * 0.5f;
-        float swarmMid = (swarmPreferredMinDistance + swarmPreferredMaxDistance) * 0.5f;
-        float pounceScore = (inPounceRange && facingTarget) ? (1f - Mathf.Clamp01(Mathf.Abs(pounceMid - dist) / 7f)) * pounceSkillWeight : 0f;
-        float swarmScore = (inSwarmRange && facingTarget) ? (1f - Mathf.Clamp01(Mathf.Abs(swarmMid - dist) / 7f)) * swarmSkillWeight : 0f;
-        if (CanPounce() && pounceScore >= swarmScore && pounceScore > 0.15f) { StartPounce(); return true; }
-        if (CanSwarm() && swarmScore > pounceScore && swarmScore > 0.15f) { StartSwarm(); return true; }
         return false;
     }
-    private bool IsFacingTarget(Transform target, float maxAngle)
-    {
-        Vector3 to = target.position - transform.position;
-        to.y = 0f;
-        if (to.sqrMagnitude < 0.0001f) return false;
-        float angle = Vector3.Angle(new Vector3(transform.forward.x, 0f, transform.forward.z).normalized, to.normalized);
-        return angle <= Mathf.Clamp(maxAngle, 1f, 60f);
-    }
-    private void FaceTarget(Transform target)
-    {
-        Vector3 look = new Vector3(target.position.x, transform.position.y, target.position.z);
-        Vector3 dir = (look - transform.position);
-        if (dir.sqrMagnitude > 0.0001f)
-        {
-            Quaternion targetRot = Quaternion.LookRotation(dir);
-            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotationSpeedDegrees * Time.deltaTime);
-        }
-        if (controller != null && controller.enabled)
-            controller.SimpleMove(Vector3.zero);
-    }
-
-    #endregion
 
     #region Pounce Attack
 
     private bool CanPounce()
     {
+        if (activeAbility != null) return false;
+        if (basicRoutine != null) return false;
+        if (isBusy || globalBusyTimer > 0f) return false;
         if (Time.time - lastPounceTime < pounceCooldown) return false;
+        if (Time.time - lastAnySkillRecoveryEnd < 4f) return false;
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
         float distance = Vector3.Distance(transform.position, target.position);
@@ -185,136 +164,219 @@ public class AswangUnitAI : BaseEnemyAI
 
     private void StartPounce()
     {
-        lastPounceTime = Time.time;
-        if (enemyData != null) lastAttackTime = Time.time; // gate basic after special
-        StartCoroutine(CoPounce());
+        if (activeAbility != null) return;
+        if (enemyData != null) lastAttackTime = Time.time;
+        activeAbility = StartCoroutine(CoPounce());
     }
 
     private IEnumerator CoPounce()
     {
-        if (animator != null && HasTrigger(pounceTrigger)) animator.SetTrigger(pounceTrigger);
-        // windup sfx (stoppable)
-        if (audioSource != null && pounceSFX != null)
+        BeginAction(AIState.Special1);
+
+        // Capture leap direction before windup (where to leap)
+        var target = blackboard.Get<Transform>("target");
+        Vector3 leapDirection = transform.forward; // Default to current forward
+        if (target != null)
         {
-            audioSource.clip = pounceSFX;
+            Vector3 toTarget = new Vector3(target.position.x, transform.position.y, target.position.z) - transform.position;
+            if (toTarget.sqrMagnitude > 0.0001f)
+            {
+                leapDirection = toTarget.normalized;
+                // Set rotation once before windup
+                transform.rotation = Quaternion.LookRotation(leapDirection);
+            }
+        }
+
+        // Windup animation trigger
+        if (animator != null && HasTrigger(pounceWindupTrigger)) animator.SetTrigger(pounceWindupTrigger);
+        // Windup VFX/SFX
+        if (audioSource != null && pounceWindupSFX != null)
+        {
+            audioSource.clip = pounceWindupSFX;
             audioSource.loop = false;
             audioSource.Play();
         }
-        // windup vfx
-        GameObject pounceWindupFx = null;
-        if (pounceVFX != null)
+        GameObject windupFx = null;
+        if (pounceWindupVFX != null)
         {
-            pounceWindupFx = Instantiate(pounceVFX, transform);
-            pounceWindupFx.transform.localPosition = pounceVFXOffset;
-            if (pounceVFXScale > 0f) pounceWindupFx.transform.localScale = Vector3.one * pounceVFXScale;
+            windupFx = Instantiate(pounceWindupVFX, transform);
+            windupFx.transform.localPosition = pounceWindupVFXOffset;
+            if (pounceWindupVFXScale > 0f) windupFx.transform.localScale = Vector3.one * pounceWindupVFXScale;
         }
 
-        var target = blackboard.Get<Transform>("target");
-        if (target != null)
+        // Windup phase - lock rotation (don't face player)
+        float windup = pounceWindup;
+        while (windup > 0f)
         {
-            Vector3 leapDirection = (target.position - transform.position).normalized;
-            leapDirection.y = 0f;
+            windup -= Time.deltaTime;
+            // Lock rotation during windup
+            transform.rotation = Quaternion.LookRotation(leapDirection);
+            if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+            yield return null;
+        }
 
-            // end windup visuals/audio and play activation vfx/sfx before leap
-            if (audioSource != null && audioSource.clip == pounceSFX)
+        // End windup visuals/audio and play activation VFX/SFX
+        if (audioSource != null && audioSource.clip == pounceWindupSFX)
+        {
+            audioSource.Stop();
+            audioSource.clip = null;
+        }
+        if (windupFx != null) Destroy(windupFx);
+        if (pounceImpactVFX != null)
+        {
+            var fx = Instantiate(pounceImpactVFX, transform);
+            fx.transform.localPosition = pounceImpactVFXOffset;
+            if (pounceImpactVFXScale > 0f) fx.transform.localScale = Vector3.one * pounceImpactVFXScale;
+        }
+        if (audioSource != null && pounceImpactSFX != null) audioSource.PlayOneShot(pounceImpactSFX);
+
+        // Pounce animation trigger
+        if (animator != null && HasTrigger(pounceTrigger)) animator.SetTrigger(pounceTrigger);
+
+        // Forward leap (parabolic arc)
+        Vector3 startPos = transform.position;
+        Vector3 endPos = startPos + leapDirection * pounceLeapDistance;
+        endPos.y = startPos.y; // Keep Y level for landing
+
+        float leapTime = 0f;
+        HashSet<PlayerStats> hitPlayers = new HashSet<PlayerStats>(); // Track players already hit
+        while (leapTime < pounceLeapDuration)
+        {
+            leapTime += Time.deltaTime;
+            float progress = leapTime / pounceLeapDuration;
+
+            // Parabolic arc for jump
+            float height = Mathf.Sin(progress * Mathf.PI) * pounceLeapHeight;
+            Vector3 currentPos = Vector3.Lerp(startPos, endPos, progress);
+            currentPos.y = startPos.y + height;
+
+            // Move with CharacterController
+            if (controller != null && controller.enabled)
             {
-                audioSource.Stop();
-                audioSource.clip = null;
+                Vector3 move = currentPos - transform.position;
+                controller.Move(move);
             }
-            if (pounceWindupFx != null) Destroy(pounceWindupFx);
-            if (pounceImpactVFX != null)
+            else
             {
-                var fx = Instantiate(pounceImpactVFX, transform);
-                fx.transform.localPosition = pounceImpactVFXOffset;
-                if (pounceImpactVFXScale > 0f) fx.transform.localScale = Vector3.one * pounceImpactVFXScale;
-            }
-            if (audioSource != null && pounceImpactSFX != null) audioSource.PlayOneShot(pounceImpactSFX);
-
-            float leapTime = pounceLeapDistance / pounceLeapSpeed;
-            float elapsedTime = 0f;
-
-            while (elapsedTime < leapTime && target != null)
-            {
-                Vector3 newPosition = transform.position + leapDirection * pounceLeapSpeed * Time.deltaTime;
-                if (controller != null && controller.enabled)
-                {
-                    controller.Move((newPosition - transform.position));
-                }
-                elapsedTime += Time.deltaTime;
-                yield return null;
+                transform.position = currentPos;
             }
 
-            // Damage on landing
+            // Lock rotation during leap
+            transform.rotation = Quaternion.LookRotation(leapDirection);
+
+            // Check for hits during leap - ONE DAMAGE PER PLAYER
             var hitColliders = Physics.OverlapSphere(transform.position, pounceHitRadius);
             foreach (var hit in hitColliders)
             {
                 if (hit.CompareTag("Player"))
                 {
                     var playerStats = hit.GetComponent<PlayerStats>();
-                    if (playerStats != null) playerStats.TakeDamage(pounceDamage);
+                    if (playerStats != null && !hitPlayers.Contains(playerStats))
+                    {
+                        playerStats.TakeDamage(pounceDamage);
+                        hitPlayers.Add(playerStats);
+                    }
                 }
             }
+
+            yield return null;
         }
-    }
 
-    #endregion
-
-    #region Shadow Swarm
-
-    private bool CanSwarm()
-    {
-        if (Time.time - lastSwarmTime < swarmCooldown) return false;
-        var target = blackboard.Get<Transform>("target");
-        if (target == null) return false;
-        float distance = Vector3.Distance(transform.position, target.position);
-        return distance <= swarmRadius;
-    }
-
-    private void StartSwarm()
-    {
-        lastSwarmTime = Time.time;
-        StartCoroutine(CoSwarm());
-    }
-
-    private IEnumerator CoSwarm()
-    {
-        if (animator != null && HasTrigger(swarmTrigger)) animator.SetTrigger(swarmTrigger);
-        if (audioSource != null && swarmSFX != null) audioSource.PlayOneShot(swarmSFX);
-        if (swarmVFX != null) activeSwarmVFX = Instantiate(swarmVFX, transform.position, transform.rotation);
-
-        swarmCoroutine = StartCoroutine(CoSwarmDamageTicks());
-        yield return new WaitForSeconds(swarmDuration);
-
-        if (swarmCoroutine != null) StopCoroutine(swarmCoroutine);
-        if (activeSwarmVFX != null) Destroy(activeSwarmVFX);
-    }
-
-    private IEnumerator CoSwarmDamageTicks()
-    {
-        while (true)
+        // Ensure we're at end position
+        if (controller != null && controller.enabled)
         {
-            var hitColliders = Physics.OverlapSphere(transform.position, swarmRadius);
-            foreach (var hit in hitColliders)
-            {
-                if (hit.CompareTag("Player"))
-                {
-                    var playerStats = hit.GetComponent<PlayerStats>();
-                    if (playerStats != null) playerStats.TakeDamage(swarmTickDamage);
-                }
-            }
-            yield return new WaitForSeconds(swarmTickInterval);
+            controller.enabled = false;
+            transform.position = endPos;
+            controller.enabled = true;
         }
+        else
+        {
+            transform.position = endPos;
+        }
+
+        // Stoppage recovery (AI frozen after attack)
+        if (pounceStoppageTime > 0f)
+        {
+            if (animator != null && HasTrigger(skillStoppageTrigger)) animator.SetTrigger(skillStoppageTrigger);
+
+            float stopTimer = pounceStoppageTime;
+            float quarterStoppage = pounceStoppageTime * 0.75f;
+
+            while (stopTimer > 0f)
+            {
+                stopTimer -= Time.deltaTime;
+                if (controller != null && controller.enabled)
+                    controller.SimpleMove(Vector3.zero);
+
+                // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
+                if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
+                {
+                    animator.SetBool("Exhausted", true);
+                }
+
+                yield return null;
+            }
+
+            // Clear Exhausted boolean parameter
+            if (animator != null) animator.SetBool("Exhausted", false);
+        }
+
+        // End busy state so AI can move during recovery
+        EndAction();
+
+        // Recovery time (AI can move but skill still on cooldown, gradual speed recovery)
+        if (pounceRecoveryTime > 0f)
+        {
+            lastAnySkillRecoveryStart = Time.time;
+            float recovery = pounceRecoveryTime;
+            while (recovery > 0f)
+            {
+                recovery -= Time.deltaTime;
+                yield return null;
+            }
+            lastAnySkillRecoveryEnd = Time.time;
+        }
+        else
+        {
+            lastAnySkillRecoveryEnd = Time.time;
+        }
+
+        activeAbility = null;
+        lastPounceTime = Time.time;
     }
 
     #endregion
 
-    #region Cleanup
-
-    void OnDestroy()
+    protected override float GetMoveSpeed()
     {
-        if (swarmCoroutine != null) StopCoroutine(swarmCoroutine);
-        if (activeSwarmVFX != null) Destroy(activeSwarmVFX);
+        // Return 0 if AI is busy or has active ability (should be stopped)
+        if (isBusy || globalBusyTimer > 0f || activeAbility != null || basicRoutine != null)
+        {
+            return 0f;
+        }
+
+        // If AI is idle (not patrolling or chasing), return 0
+        if (aiState == AIState.Idle)
+        {
+            return 0f;
+        }
+
+        float baseSpeed = base.GetMoveSpeed();
+
+        // If we're in recovery phase, gradually increase speed from 0.3 to 1.0
+        if (Time.time >= lastAnySkillRecoveryStart && Time.time <= lastAnySkillRecoveryEnd && lastAnySkillRecoveryStart >= 0f)
+        {
+            float recoveryDuration = lastAnySkillRecoveryEnd - lastAnySkillRecoveryStart;
+            if (recoveryDuration > 0f)
+            {
+                float elapsed = Time.time - lastAnySkillRecoveryStart;
+                float progress = Mathf.Clamp01(elapsed / recoveryDuration);
+                float speedMultiplier = Mathf.Lerp(0.3f, 1.0f, progress);
+                return baseSpeed * speedMultiplier;
+            }
+        }
+
+        return baseSpeed;
     }
 
-    #endregion
 }

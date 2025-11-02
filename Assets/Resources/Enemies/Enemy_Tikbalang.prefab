@@ -415,7 +415,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 9bd547d68af568941b91353ce503628c, type: 3}
       propertyPath: m_LocalPosition.z
-      value: 0
+      value: -10.15
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 9bd547d68af568941b91353ce503628c, type: 3}
       propertyPath: m_LocalRotation.w
@@ -642,16 +642,12 @@ MonoBehaviour:
   animator: {fileID: 8336374754291112822}
   speedParam: Speed
   attackTrigger: Attack
+  attackWindupTrigger: AttackWindup
+  attackImpactTrigger: AttackImpact
   hitTrigger: Hit
   dieTrigger: Die
   isDeadBool: IsDead
   showDebugInfo: 0
-  rotationSpeedDegrees: 360
-  patrolSpeed: 2
-  chaseSpeed: 5
-  orbitWhenOnCooldown: 1
-  orbitSpeedMultiplier: 0.4
-  desiredAttackDistanceFraction: 0.85
   buffDamageVFXPrefab: {fileID: 5433017580198672396, guid: 7440468fe76adc64b81167a34cb91a10, type: 3}
   buffSpeedVFXPrefab: {fileID: 8652154132609600191, guid: 5efed870bd862c242bd383e8f497d4d2, type: 3}
   buffStaminaVFXPrefab: {fileID: 5758305392496111728, guid: 8be7207037ab8b44484315c336527a8d, type: 3}
@@ -701,9 +697,6 @@ MonoBehaviour:
   stompSkillWeight: 0.7
   stompStoppageTime: 1
   stompRecoveryTime: 1.4
-  preferredDistance: 4.5
-  backoffSpeedMultiplier: 1
-  specialFacingAngle: 20
 --- !u!143 &2157693877144803499
 CharacterController:
   m_ObjectHideFlags: 0

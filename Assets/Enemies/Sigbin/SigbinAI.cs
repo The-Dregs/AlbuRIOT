@@ -14,46 +14,31 @@ public class SigbinAI : BaseEnemyAI
     public float backstepCooldown = 7f;
     public float backstepDistance = 2.0f;
     public float backstepDuration = 0.15f;
-    public GameObject backstepVFX;
+    public GameObject backstepWindupVFX;
     public GameObject backstepImpactVFX;
-    public Vector3 backstepVFXOffset = Vector3.zero;
-    public float backstepVFXScale = 1.0f;
+    public Vector3 backstepWindupVFXOffset = Vector3.zero;
+    public float backstepWindupVFXScale = 1.0f;
+    public Vector3 backstepImpactVFXOffset = Vector3.zero;
+    public float backstepImpactVFXScale = 1.0f;
     public AudioClip backstepWindupSFX;
     public AudioClip backstepImpactSFX;
+    public string backstepWindupTrigger = "BackstepWindup";
     public string backstepTrigger = "Backstep";
-
-    [Header("Drain Essence (PBAOE DoT)")]
-    public int drainTickDamage = 5; // every 0.5s for 2.0s (4 ticks)
-    public float drainTickInterval = 0.5f;
-    public int drainTicks = 4;
-    public float drainRadius = 2.0f;
-    public float drainCooldown = 10f;
-    public GameObject drainWindupVFX;
-    public GameObject drainActiveVFX;
-    public Vector3 drainVFXOffset = Vector3.zero;
-    public float drainVFXScale = 1.0f;
-    public AudioClip drainWindupSFX;
-    public AudioClip drainActiveSFX;
-    public string drainTrigger = "Drain";
+    public string skillStoppageTrigger = "SkillStoppage";
 
     [Header("Skill Selection Tuning")]
-    public float backstepPreferredMinDistance = 1f;
-    public float backstepPreferredMaxDistance = 2.5f;
-    [Range(0f, 1f)] public float backstepSkillWeight = 0.7f;
-    [SerializeField] private float backstepStoppageTime = 1f;
-    public float drainPreferredMinDistance = 1.5f;
-    public float drainPreferredMaxDistance = 3.8f;
-    [Range(0f, 1f)] public float drainSkillWeight = 0.9f;
-    [SerializeField] private float drainStoppageTime = 1f;
-    [Header("Spacing")]
-    public float preferredDistance = 1.7f;
-    [Range(0.1f,2f)] public float backoffSpeedMultiplier = 1.0f;
-    [Header("Facing")]
-    [Range(1f,60f)] public float specialFacingAngle = 20f;
+    public float backstepStoppageTime = 1f;
+    public float backstepRecoveryTime = 0.5f;
 
     private float lastBackstepTime = -9999f;
-    private float lastDrainTime = -9999f;
+    private float lastAnySkillRecoveryEnd = -9999f;
+    private float lastAnySkillRecoveryStart = -9999f;
     private AudioSource audioSource;
+    private Coroutine activeAbility;
+    private Coroutine basicRoutine;
+
+    // Debug accessors
+    public float BackstepCooldownRemaining => Mathf.Max(0f, backstepCooldown - (Time.time - lastBackstepTime));
 
     protected override void InitializeEnemy()
     {
@@ -71,8 +56,6 @@ public class SigbinAI : BaseEnemyAI
         var basicAttack = new ActionNode(blackboard, () => { PerformBasicAttack(); return NodeState.Success; }, "basic");
         var canBackstep = new ConditionNode(blackboard, CanBackstep, "can_backstep");
         var doBackstep = new ActionNode(blackboard, () => { StartBackstep(); return NodeState.Success; }, "backstep");
-        var canDrain = new ConditionNode(blackboard, CanDrain, "can_drain");
-        var doDrain = new ActionNode(blackboard, () => { StartDrain(); return NodeState.Success; }, "drain");
 
         behaviorTree = new Selector(blackboard, "root")
             .Add(
@@ -82,7 +65,6 @@ public class SigbinAI : BaseEnemyAI
                     targetInDetection,
                     new Selector(blackboard, "attack_opts").Add(
                         new Sequence(blackboard, "backstep_seq").Add(canBackstep, doBackstep),
-                        new Sequence(blackboard, "drain_seq").Add(canDrain, doDrain),
                         new Sequence(blackboard, "basic_seq").Add(targetInAttack, basicAttack),
                         moveToTarget
                     )
@@ -93,14 +75,46 @@ public class SigbinAI : BaseEnemyAI
 
     protected override void PerformBasicAttack()
     {
+        if (basicRoutine != null) return;
+        if (activeAbility != null) return;
+        if (isBusy || globalBusyTimer > 0f) return;
         if (enemyData == null) return;
         if (Time.time - lastAttackTime < enemyData.attackCooldown) return;
 
         var target = blackboard.Get<Transform>("target");
         if (target == null) return;
 
-        if (animator != null && HasTrigger(attackTrigger)) animator.SetTrigger(attackTrigger);
+        basicRoutine = StartCoroutine(CoBasicAttack(target));
+    }
 
+    private IEnumerator CoBasicAttack(Transform target)
+    {
+        BeginAction(AIState.BasicAttack);
+
+        // Windup animation trigger
+        if (animator != null)
+        {
+            if (HasTrigger(attackWindupTrigger))
+                animator.SetTrigger(attackWindupTrigger);
+            else if (HasTrigger(attackTrigger))
+                animator.SetTrigger(attackTrigger);
+        }
+
+        // Windup phase - freeze movement during windup
+        float windup = Mathf.Max(0f, enemyData.attackWindup);
+        while (windup > 0f)
+        {
+            windup -= Time.deltaTime;
+            if (controller != null && controller.enabled)
+                controller.SimpleMove(Vector3.zero);
+            yield return null;
+        }
+
+        // Impact animation trigger
+        if (animator != null && HasTrigger(attackImpactTrigger))
+            animator.SetTrigger(attackImpactTrigger);
+
+        // Apply damage after windup
         float radius = Mathf.Max(0.8f, enemyData.attackRange);
         Vector3 center = transform.position + transform.forward * (enemyData.attackRange * 0.5f);
         var cols = Physics.OverlapSphere(center, radius, LayerMask.GetMask("Player"));
@@ -110,57 +124,73 @@ public class SigbinAI : BaseEnemyAI
             if (ps != null) ps.TakeDamage(enemyData.basicDamage);
         }
 
+        // Post-stop using attackMoveLock duration
+        float post = Mathf.Max(0.1f, enemyData.attackMoveLock);
+        while (post > 0f)
+        {
+            post -= Time.deltaTime;
+            if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+            yield return null;
+        }
+
         lastAttackTime = Time.time;
         attackLockTimer = enemyData.attackMoveLock;
+        basicRoutine = null;
+        EndAction();
     }
 
     protected override bool TrySpecialAbilities()
     {
-        if (isBusy) return false;
-        var target = blackboard.Get<Transform>("target");
-        if (target == null) return false;
-        float dist = Vector3.Distance(transform.position, target.position);
-        bool facingTarget = IsFacingTarget(target, specialFacingAngle);
-        bool inBackstepRange = dist >= backstepPreferredMinDistance && dist <= backstepPreferredMaxDistance;
-        bool inDrainRange = dist >= drainPreferredMinDistance && dist <= drainPreferredMaxDistance;
-        float backstepMid = (backstepPreferredMinDistance + backstepPreferredMaxDistance) * 0.5f;
-        float drainMid = (drainPreferredMinDistance + drainPreferredMaxDistance) * 0.5f;
-        float backstepScore = (inBackstepRange && facingTarget) ? (1f - Mathf.Clamp01(Mathf.Abs(backstepMid - dist) / 2f)) * backstepSkillWeight : 0f;
-        float drainScore = (inDrainRange && facingTarget) ? (1f - Mathf.Clamp01(Mathf.Abs(drainMid - dist) / 3f)) * drainSkillWeight : 0f;
-        if (CanBackstep() && backstepScore >= drainScore && backstepScore > 0.15f) { StartBackstep(); return true; }
-        if (CanDrain() && drainScore > backstepScore && drainScore > 0.15f) { StartDrain(); return true; }
         return false;
     }
 
+    #region Backstep Slash
+
     private bool CanBackstep()
     {
+        if (activeAbility != null) return false;
+        if (basicRoutine != null) return false;
+        if (isBusy || globalBusyTimer > 0f) return false;
         if (Time.time - lastBackstepTime < backstepCooldown) return false;
+        if (Time.time - lastAnySkillRecoveryEnd < 4f) return false;
         var target = blackboard.Get<Transform>("target");
         return target != null;
     }
 
     private void StartBackstep()
     {
-        lastBackstepTime = Time.time;
+        if (activeAbility != null) return;
         if (enemyData != null) lastAttackTime = Time.time;
-        StartCoroutine(CoBackstep());
+        activeAbility = StartCoroutine(CoBackstep());
     }
 
     private IEnumerator CoBackstep()
     {
-        if (animator != null && HasTrigger(backstepTrigger)) animator.SetTrigger(backstepTrigger);
+        BeginAction(AIState.Special1);
+
+        // Windup animation trigger
+        if (animator != null && HasTrigger(backstepWindupTrigger)) animator.SetTrigger(backstepWindupTrigger);
+        else if (animator != null && HasTrigger(backstepTrigger)) animator.SetTrigger(backstepTrigger);
         if (audioSource != null && backstepWindupSFX != null) audioSource.PlayOneShot(backstepWindupSFX);
         GameObject wind = null;
-        if (backstepVFX != null)
+        if (backstepWindupVFX != null)
         {
-            wind = Instantiate(backstepVFX, transform);
-            wind.transform.localPosition = backstepVFXOffset;
-            if (backstepVFXScale > 0f) wind.transform.localScale = Vector3.one * backstepVFXScale;
+            wind = Instantiate(backstepWindupVFX, transform);
+            wind.transform.localPosition = backstepWindupVFXOffset;
+            if (backstepWindupVFXScale > 0f) wind.transform.localScale = Vector3.one * backstepWindupVFXScale;
         }
-        yield return new WaitForSeconds(Mathf.Max(0f, backstepWindup));
+
+        // Windup phase - freeze movement
+        float windup = Mathf.Max(0f, backstepWindup);
+        while (windup > 0f)
+        {
+            windup -= Time.deltaTime;
+            if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+            yield return null;
+        }
         if (wind != null) Destroy(wind);
 
-        // brief backstep (backwards) then slash hit check
+        // Backstep backwards
         float t = Mathf.Max(0f, backstepDuration);
         Vector3 backward = -transform.forward;
         while (t > 0f)
@@ -171,6 +201,7 @@ public class SigbinAI : BaseEnemyAI
             yield return null;
         }
 
+        // Check for target within effective range and apply damage
         var target = blackboard.Get<Transform>("target");
         if (target != null)
         {
@@ -181,83 +212,96 @@ public class SigbinAI : BaseEnemyAI
                 if (backstepImpactVFX != null)
                 {
                     var fx = Instantiate(backstepImpactVFX, transform);
-                    fx.transform.localPosition = backstepVFXOffset;
-                    if (backstepVFXScale > 0f) fx.transform.localScale = Vector3.one * backstepVFXScale;
+                    fx.transform.localPosition = backstepImpactVFXOffset;
+                    if (backstepImpactVFXScale > 0f) fx.transform.localScale = Vector3.one * backstepImpactVFXScale;
                 }
                 var ps = target.GetComponent<PlayerStats>();
                 if (ps != null) ps.TakeDamage(backstepDamage);
             }
         }
-    }
 
-    private bool CanDrain()
-    {
-        if (Time.time - lastDrainTime < drainCooldown) return false;
-        var target = blackboard.Get<Transform>("target");
-        return target != null && Vector3.Distance(transform.position, target.position) <= drainRadius + 1f;
-    }
-
-    private void StartDrain()
-    {
-        lastDrainTime = Time.time;
-        if (enemyData != null) lastAttackTime = Time.time;
-        StartCoroutine(CoDrain());
-    }
-
-    private IEnumerator CoDrain()
-    {
-        if (animator != null && HasTrigger(drainTrigger)) animator.SetTrigger(drainTrigger);
-        if (audioSource != null && drainWindupSFX != null) audioSource.PlayOneShot(drainWindupSFX);
-        GameObject wind = null;
-        if (drainWindupVFX != null)
+        // Stoppage recovery (AI frozen after attack)
+        if (backstepStoppageTime > 0f)
         {
-            wind = Instantiate(drainWindupVFX, transform);
-            wind.transform.localPosition = drainVFXOffset;
-            if (drainVFXScale > 0f) wind.transform.localScale = Vector3.one * drainVFXScale;
-        }
-        // small windup before active DoT
-        yield return new WaitForSeconds(0.2f);
-        if (wind != null) Destroy(wind);
-        if (drainActiveVFX != null)
-        {
-            var fx = Instantiate(drainActiveVFX, transform);
-            fx.transform.localPosition = drainVFXOffset;
-            if (drainVFXScale > 0f) fx.transform.localScale = Vector3.one * drainVFXScale;
-        }
-        if (audioSource != null && drainActiveSFX != null) audioSource.PlayOneShot(drainActiveSFX);
+            if (animator != null && HasTrigger(skillStoppageTrigger)) animator.SetTrigger(skillStoppageTrigger);
 
-        int ticks = Mathf.Max(1, drainTicks);
-        float interval = Mathf.Max(0.1f, drainTickInterval);
-        for (int i = 0; i < ticks; i++)
-        {
-            var cols = Physics.OverlapSphere(transform.position, drainRadius, LayerMask.GetMask("Player"));
-            foreach (var c in cols)
+            float stopTimer = backstepStoppageTime;
+            float quarterStoppage = backstepStoppageTime * 0.75f;
+
+            while (stopTimer > 0f)
             {
-                var ps = c.GetComponentInParent<PlayerStats>();
-                if (ps != null) ps.TakeDamage(drainTickDamage);
+                stopTimer -= Time.deltaTime;
+                if (controller != null && controller.enabled)
+                    controller.SimpleMove(Vector3.zero);
+
+                // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
+                if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
+                {
+                    animator.SetBool("Exhausted", true);
+                }
+
+                yield return null;
             }
-            yield return new WaitForSeconds(interval);
+
+            // Clear Exhausted boolean parameter
+            if (animator != null) animator.SetBool("Exhausted", false);
         }
+
+        // End busy state so AI can move during recovery
+        EndAction();
+
+        // Recovery time (AI can move but skill still on cooldown, gradual speed recovery)
+        if (backstepRecoveryTime > 0f)
+        {
+            lastAnySkillRecoveryStart = Time.time;
+            float recovery = backstepRecoveryTime;
+            while (recovery > 0f)
+            {
+                recovery -= Time.deltaTime;
+                yield return null;
+            }
+            lastAnySkillRecoveryEnd = Time.time;
+        }
+        else
+        {
+            lastAnySkillRecoveryEnd = Time.time;
+        }
+
+        activeAbility = null;
+        lastBackstepTime = Time.time;
     }
 
-    private bool IsFacingTarget(Transform target, float maxAngle)
+    #endregion
+
+    protected override float GetMoveSpeed()
     {
-        Vector3 to = target.position - transform.position;
-        to.y = 0f;
-        if (to.sqrMagnitude < 0.0001f) return false;
-        float angle = Vector3.Angle(new Vector3(transform.forward.x, 0f, transform.forward.z).normalized, to.normalized);
-        return angle <= Mathf.Clamp(maxAngle, 1f, 60f);
-    }
-    private void FaceTarget(Transform target)
-    {
-        Vector3 look = new Vector3(target.position.x, transform.position.y, target.position.z);
-        Vector3 dir = (look - transform.position);
-        if (dir.sqrMagnitude > 0.0001f)
+        // Return 0 if AI is busy or has active ability (should be stopped)
+        if (isBusy || globalBusyTimer > 0f || activeAbility != null || basicRoutine != null)
         {
-            Quaternion targetRot = Quaternion.LookRotation(dir);
-            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotationSpeedDegrees * Time.deltaTime);
+            return 0f;
         }
-        if (controller != null && controller.enabled)
-            controller.SimpleMove(Vector3.zero);
+
+        // If AI is idle (not patrolling or chasing), return 0
+        if (aiState == AIState.Idle)
+        {
+            return 0f;
+        }
+
+        float baseSpeed = base.GetMoveSpeed();
+
+        // If we're in recovery phase, gradually increase speed from 0.3 to 1.0
+        if (Time.time >= lastAnySkillRecoveryStart && Time.time <= lastAnySkillRecoveryEnd && lastAnySkillRecoveryStart >= 0f)
+        {
+            float recoveryDuration = lastAnySkillRecoveryEnd - lastAnySkillRecoveryStart;
+            if (recoveryDuration > 0f)
+            {
+                float elapsed = Time.time - lastAnySkillRecoveryStart;
+                float progress = Mathf.Clamp01(elapsed / recoveryDuration);
+                float speedMultiplier = Mathf.Lerp(0.3f, 1.0f, progress);
+                return baseSpeed * speedMultiplier;
+            }
+        }
+
+        return baseSpeed;
     }
 }

@@ -85,7 +85,97 @@ public class EnemyDebugOverhead : MonoBehaviour
 				}
 				else
 				{
-					tmp.text = header + $"\nCD basic:{basicCd:F1}";
+					// If this is a Shadow-Touched Diwata, show ability cooldowns
+					var shadowDiwata = enemy as ShadowTouchedDiwataAI;
+					if (shadowDiwata != null)
+					{
+						string cds = $"CD basic:{basicCd:F1}  eclipseveil:{shadowDiwata.EclipseVeilCooldownRemaining:F1}  lament:{shadowDiwata.LamentCooldownRemaining:F1}";
+						tmp.text = header + "\n" + cds;
+					}
+					else
+					{
+						// If this is an Aswang Unit, show ability cooldowns
+						var aswang = enemy as AswangUnitAI;
+						if (aswang != null)
+						{
+							string cds = $"CD basic:{basicCd:F1}  pounce:{aswang.PounceCooldownRemaining:F1}";
+							tmp.text = header + "\n" + cds;
+						}
+						else
+						{
+							// If this is an Aswang Queen, show ability cooldowns
+							var aswangQueen = enemy as AswangQueenAI;
+							if (aswangQueen != null)
+							{
+								string cds = $"CD basic:{basicCd:F1}  pounce:{aswangQueen.PounceCooldownRemaining:F1}  swarm:{aswangQueen.SwarmCooldownRemaining:F1}";
+								tmp.text = header + "\n" + cds;
+							}
+							else
+							{
+								// If this is a Manananggal, show ability cooldowns
+								var manananggal = enemy as ManananggalAI;
+								if (manananggal != null)
+								{
+									string cds = $"CD basic:{basicCd:F1}  dive:{manananggal.DiveCooldownRemaining:F1}";
+									tmp.text = header + "\n" + cds;
+								}
+								else
+								{
+									// If this is a Tiyanak, show ability cooldowns
+									var tiyanak = enemy as TiyanakAI;
+									if (tiyanak != null)
+									{
+										string cds = $"CD basic:{basicCd:F1}  lunge:{tiyanak.LungeCooldownRemaining:F1}";
+										tmp.text = header + "\n" + cds;
+									}
+									else
+									{
+										// If this is a Sigbin, show ability cooldowns
+										var sigbin = enemy as SigbinAI;
+										if (sigbin != null)
+										{
+											string cds = $"CD basic:{basicCd:F1}  backstep:{sigbin.BackstepCooldownRemaining:F1}";
+											tmp.text = header + "\n" + cds;
+										}
+										else
+										{
+											// If this is a Sirena, show ability cooldowns
+											var sirena = enemy as SirenaAI;
+											if (sirena != null)
+											{
+												string cds = $"CD basic:{basicCd:F1}  burst:{sirena.BurstCooldownRemaining:F1}";
+												tmp.text = header + "\n" + cds;
+											}
+											else
+											{
+												// If this is a Busaw, show ability cooldowns
+												var busaw = enemy as BusawAI;
+												if (busaw != null)
+												{
+													string cds = $"CD basic:{basicCd:F1}  grasp:{busaw.GraspCooldownRemaining:F1}";
+													tmp.text = header + "\n" + cds;
+												}
+												else
+												{
+													// If this is a Wakwak, show ability cooldowns
+													var wakwak = enemy as WakwakAI;
+													if (wakwak != null)
+													{
+														string cds = $"CD basic:{basicCd:F1}  descent:{wakwak.DescentCooldownRemaining:F1}";
+														tmp.text = header + "\n" + cds;
+													}
+													else
+													{
+														tmp.text = header + $"\nCD basic:{basicCd:F1}";
+													}
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
 				}
 			}
 		}

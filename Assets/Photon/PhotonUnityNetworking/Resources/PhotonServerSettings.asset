@@ -97,6 +97,8 @@ MonoBehaviour:
   - RPC_ClearAll
   - RPC_SpawnAll
   - RPC_GenerateAll
+  - RPC_ApplyHit
+  - RPC_SyncHitState
   DisableAutoOpenWizard: 1
   ShowSettings: 1
   DevRegionSetOnce: 1

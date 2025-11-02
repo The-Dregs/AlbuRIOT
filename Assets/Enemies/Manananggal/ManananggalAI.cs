@@ -2,6 +2,7 @@ using UnityEngine;
 using Photon.Pun;
 using AlbuRIOT.AI.BehaviorTree;
 using System.Collections;
+using System.Collections.Generic;
 
 [RequireComponent(typeof(CharacterController))]
 [DisallowMultipleComponent]
@@ -20,42 +21,23 @@ public class ManananggalAI : BaseEnemyAI
     public float diveVFXScale = 1.0f;
     public AudioClip diveWindupSFX;
     public AudioClip diveImpactSFX;
+    public string diveWindupTrigger = "DiveWindup";
     public string diveTrigger = "Dive";
+    public string skillStoppageTrigger = "SkillStoppage";
 
-    [Header("Screech of Hunger (AOE pulse)")]
-    public int screechDamage = 10;
-    public float screechRadius = 4.5f;
-    public float screechWindup = 0.5f;
-    public float screechCooldown = 10f;
-    public GameObject screechWindupVFX;
-    public GameObject screechImpactVFX;
-    public Vector3 screechVFXOffset = Vector3.zero;
-    public float screechVFXScale = 1.0f;
-    public AudioClip screechWindupSFX;
-    public AudioClip screechImpactSFX;
-    public string screechTrigger = "Screech";
-
-    // Skill Selection Tuning
     [Header("Skill Selection Tuning")]
-    public float divePreferredMinDistance = 6f;
-    public float divePreferredMaxDistance = 12f;
-    [Range(0f, 1f)] public float diveSkillWeight = 0.6f;
-    public float screechPreferredMinDistance = 2.5f;
-    public float screechPreferredMaxDistance = 6f;
-    [Range(0f, 1f)] public float screechSkillWeight = 0.8f;
-    [SerializeField] private float diveStoppageTime = 1f;
-    [SerializeField] private float screechStoppageTime = 1f;
-
-    // Spacing and Facing
-    [Header("Spacing")]
-    public float preferredDistance = 3.0f;
-    [Range(0.1f,2f)] public float backoffSpeedMultiplier = 0.8f;
-    [Header("Facing")]
-    [Range(1f,60f)] public float specialFacingAngle = 20f;
+    public float diveStoppageTime = 1f;
+    public float diveRecoveryTime = 0.5f;
 
     private float lastDiveTime = -9999f;
-    private float lastScreechTime = -9999f;
+    private float lastAnySkillRecoveryEnd = -9999f;
+    private float lastAnySkillRecoveryStart = -9999f;
     private AudioSource audioSource;
+    private Coroutine activeAbility;
+    private Coroutine basicRoutine;
+
+    // Debug accessors
+    public float DiveCooldownRemaining => Mathf.Max(0f, diveCooldown - (Time.time - lastDiveTime));
 
     protected override void InitializeEnemy()
     {
@@ -73,8 +55,6 @@ public class ManananggalAI : BaseEnemyAI
         var basicAttack = new ActionNode(blackboard, () => { PerformBasicAttack(); return NodeState.Success; }, "basic");
         var canDive = new ConditionNode(blackboard, CanDive, "can_dive");
         var doDive = new ActionNode(blackboard, () => { StartDive(); return NodeState.Success; }, "dive");
-        var canScreech = new ConditionNode(blackboard, CanScreech, "can_screech");
-        var doScreech = new ActionNode(blackboard, () => { StartScreech(); return NodeState.Success; }, "screech");
 
         behaviorTree = new Selector(blackboard, "root")
             .Add(
@@ -84,7 +64,6 @@ public class ManananggalAI : BaseEnemyAI
                     targetInDetection,
                     new Selector(blackboard, "attack_opts").Add(
                         new Sequence(blackboard, "dive_seq").Add(canDive, doDive),
-                        new Sequence(blackboard, "screech_seq").Add(canScreech, doScreech),
                         new Sequence(blackboard, "basic_seq").Add(targetInAttack, basicAttack),
                         moveToTarget
                     )
@@ -95,14 +74,46 @@ public class ManananggalAI : BaseEnemyAI
 
     protected override void PerformBasicAttack()
     {
+        if (basicRoutine != null) return;
+        if (activeAbility != null) return;
+        if (isBusy || globalBusyTimer > 0f) return;
         if (enemyData == null) return;
         if (Time.time - lastAttackTime < enemyData.attackCooldown) return;
 
         var target = blackboard.Get<Transform>("target");
         if (target == null) return;
 
-        if (animator != null && HasTrigger(attackTrigger)) animator.SetTrigger(attackTrigger);
+        basicRoutine = StartCoroutine(CoBasicAttack(target));
+    }
 
+    private IEnumerator CoBasicAttack(Transform target)
+    {
+        BeginAction(AIState.BasicAttack);
+
+        // Windup animation trigger
+        if (animator != null)
+        {
+            if (HasTrigger(attackWindupTrigger))
+                animator.SetTrigger(attackWindupTrigger);
+            else if (HasTrigger(attackTrigger))
+                animator.SetTrigger(attackTrigger);
+        }
+
+        // Windup phase - freeze movement during windup
+        float windup = Mathf.Max(0f, enemyData.attackWindup);
+        while (windup > 0f)
+        {
+            windup -= Time.deltaTime;
+            if (controller != null && controller.enabled)
+                controller.SimpleMove(Vector3.zero);
+            yield return null;
+        }
+
+        // Impact animation trigger
+        if (animator != null && HasTrigger(attackImpactTrigger))
+            animator.SetTrigger(attackImpactTrigger);
+
+        // Apply damage after windup
         float radius = Mathf.Max(0.8f, enemyData.attackRange);
         Vector3 center = transform.position + transform.forward * (enemyData.attackRange * 0.5f);
         var cols = Physics.OverlapSphere(center, radius, LayerMask.GetMask("Player"));
@@ -112,49 +123,68 @@ public class ManananggalAI : BaseEnemyAI
             if (ps != null) ps.TakeDamage(enemyData.basicDamage);
         }
 
+        // Post-stop using attackMoveLock duration
+        float post = Mathf.Max(0.1f, enemyData.attackMoveLock);
+        while (post > 0f)
+        {
+            post -= Time.deltaTime;
+            if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+            yield return null;
+        }
+
         lastAttackTime = Time.time;
         attackLockTimer = enemyData.attackMoveLock;
+        basicRoutine = null;
+        EndAction();
     }
 
     protected override bool TrySpecialAbilities()
     {
-        if (isBusy) return false;
-        var target = blackboard.Get<Transform>("target");
-        if (target == null) return false;
-        float dist = Vector3.Distance(transform.position, target.position);
-        bool facingTarget = IsFacingTarget(target, specialFacingAngle);
-        bool inDiveRange = dist >= divePreferredMinDistance && dist <= divePreferredMaxDistance;
-        bool inScreechRange = dist >= screechPreferredMinDistance && dist <= screechPreferredMaxDistance;
-        float diveMid = (divePreferredMinDistance + divePreferredMaxDistance) * 0.5f;
-        float screechMid = (screechPreferredMinDistance + screechPreferredMaxDistance) * 0.5f;
-        float diveDistScore = 1f - Mathf.Clamp01(Mathf.Abs(diveMid - dist) / 10f);
-        float screechDistScore = 1f - Mathf.Clamp01(Mathf.Abs(screechMid - dist) / 10f);
-        float diveScore = (inDiveRange && facingTarget) ? diveDistScore * diveSkillWeight : 0f;
-        float screechScore = (inScreechRange && facingTarget) ? screechDistScore * screechSkillWeight : 0f;
-        if (CanDive() && diveScore >= screechScore && diveScore > 0.15f) { StartDive(); return true; }
-        if (CanScreech() && screechScore > diveScore && screechScore > 0.15f) { StartScreech(); return true; }
         return false;
     }
 
+    #region Shadow Dive
+
     private bool CanDive()
     {
+        if (activeAbility != null) return false;
+        if (basicRoutine != null) return false;
+        if (isBusy || globalBusyTimer > 0f) return false;
         if (Time.time - lastDiveTime < diveCooldown) return false;
+        if (Time.time - lastAnySkillRecoveryEnd < 4f) return false;
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
-        float d = Vector3.Distance(transform.position, target.position);
-        return d <= 12f;
+        float distance = Vector3.Distance(transform.position, target.position);
+        return distance >= 6f && distance <= 12f;
     }
 
     private void StartDive()
     {
-        lastDiveTime = Time.time;
+        if (activeAbility != null) return;
         if (enemyData != null) lastAttackTime = Time.time;
-        StartCoroutine(CoDive());
+        activeAbility = StartCoroutine(CoDive());
     }
 
     private IEnumerator CoDive()
     {
-        if (animator != null && HasTrigger(diveTrigger)) animator.SetTrigger(diveTrigger);
+        BeginAction(AIState.Special1);
+
+        // Capture dive direction before windup
+        var target = blackboard.Get<Transform>("target");
+        Vector3 diveDirection = transform.forward;
+        if (target != null)
+        {
+            Vector3 toTarget = new Vector3(target.position.x, transform.position.y, target.position.z) - transform.position;
+            if (toTarget.sqrMagnitude > 0.0001f)
+            {
+                diveDirection = toTarget.normalized;
+                transform.rotation = Quaternion.LookRotation(diveDirection);
+            }
+        }
+
+        // Windup animation trigger
+        if (animator != null && HasTrigger(diveWindupTrigger)) animator.SetTrigger(diveWindupTrigger);
+        else if (animator != null && HasTrigger(diveTrigger)) animator.SetTrigger(diveTrigger);
         if (audioSource != null && diveWindupSFX != null) audioSource.PlayOneShot(diveWindupSFX);
         GameObject wind = null;
         if (diveWindupVFX != null)
@@ -163,9 +193,19 @@ public class ManananggalAI : BaseEnemyAI
             wind.transform.localPosition = diveVFXOffset;
             if (diveVFXScale > 0f) wind.transform.localScale = Vector3.one * diveVFXScale;
         }
-        yield return new WaitForSeconds(Mathf.Max(0f, diveWindup));
+
+        // Windup phase - lock rotation
+        float windup = Mathf.Max(0f, diveWindup);
+        while (windup > 0f)
+        {
+            windup -= Time.deltaTime;
+            transform.rotation = Quaternion.LookRotation(diveDirection);
+            if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+            yield return null;
+        }
         if (wind != null) Destroy(wind);
 
+        // Ascend phase
         float ascend = Mathf.Max(0f, diveAscendTime);
         while (ascend > 0f)
         {
@@ -173,26 +213,44 @@ public class ManananggalAI : BaseEnemyAI
             yield return null;
         }
 
-        var target = blackboard.Get<Transform>("target");
-        Vector3 dir = target != null ? (target.position - transform.position) : transform.forward;
-        dir.y = 0f;
-        if (dir.sqrMagnitude > 0.0001f) dir.Normalize(); else dir = transform.forward;
+        // Update dive direction to current target position
+        if (target != null)
+        {
+            Vector3 toTarget = new Vector3(target.position.x, transform.position.y, target.position.z) - transform.position;
+            if (toTarget.sqrMagnitude > 0.0001f)
+            {
+                diveDirection = toTarget.normalized;
+            }
+        }
 
+        // Dive animation trigger
+        if (animator != null && HasTrigger(diveTrigger)) animator.SetTrigger(diveTrigger);
+
+        // Descend phase - move forward and check for hits
         float travel = 0.8f;
+        HashSet<PlayerStats> hitPlayers = new HashSet<PlayerStats>();
         while (travel > 0f)
         {
             travel -= Time.deltaTime;
             if (controller != null && controller.enabled)
-                controller.Move(dir * diveDescendSpeed * Time.deltaTime);
+                controller.Move(diveDirection * diveDescendSpeed * Time.deltaTime);
+
+            // Check for hits during dive - ONE DAMAGE PER PLAYER
             var hits = Physics.OverlapSphere(transform.position, diveHitRadius, LayerMask.GetMask("Player"));
             foreach (var h in hits)
             {
                 var ps = h.GetComponentInParent<PlayerStats>();
-                if (ps != null) ps.TakeDamage(diveDamage);
+                if (ps != null && !hitPlayers.Contains(ps))
+                {
+                    ps.TakeDamage(diveDamage);
+                    hitPlayers.Add(ps);
+                }
             }
+
             yield return null;
         }
 
+        // Impact VFX/SFX
         if (diveImpactVFX != null)
         {
             var fx = Instantiate(diveImpactVFX, transform);
@@ -200,71 +258,89 @@ public class ManananggalAI : BaseEnemyAI
             if (diveVFXScale > 0f) fx.transform.localScale = Vector3.one * diveVFXScale;
         }
         if (audioSource != null && diveImpactSFX != null) audioSource.PlayOneShot(diveImpactSFX);
-    }
 
-    private bool CanScreech()
-    {
-        if (Time.time - lastScreechTime < screechCooldown) return false;
-        var target = blackboard.Get<Transform>("target");
-        return target != null && Vector3.Distance(transform.position, target.position) <= screechRadius + 1f;
-    }
-
-    private void StartScreech()
-    {
-        lastScreechTime = Time.time;
-        if (enemyData != null) lastAttackTime = Time.time;
-        StartCoroutine(CoScreech());
-    }
-
-    private IEnumerator CoScreech()
-    {
-        if (animator != null && HasTrigger(screechTrigger)) animator.SetTrigger(screechTrigger);
-        if (audioSource != null && screechWindupSFX != null) audioSource.PlayOneShot(screechWindupSFX);
-        GameObject wind = null;
-        if (screechWindupVFX != null)
+        // Stoppage recovery (AI frozen after attack)
+        if (diveStoppageTime > 0f)
         {
-            wind = Instantiate(screechWindupVFX, transform);
-            wind.transform.localPosition = screechVFXOffset;
-            if (screechVFXScale > 0f) wind.transform.localScale = Vector3.one * screechVFXScale;
-        }
-        yield return new WaitForSeconds(Mathf.Max(0f, screechWindup));
-        if (wind != null) Destroy(wind);
-        if (screechImpactVFX != null)
-        {
-            var fx = Instantiate(screechImpactVFX, transform);
-            fx.transform.localPosition = screechVFXOffset;
-            if (screechVFXScale > 0f) fx.transform.localScale = Vector3.one * screechVFXScale;
-        }
-        if (audioSource != null && screechImpactSFX != null) audioSource.PlayOneShot(screechImpactSFX);
+            if (animator != null && HasTrigger(skillStoppageTrigger)) animator.SetTrigger(skillStoppageTrigger);
 
-        var cols = Physics.OverlapSphere(transform.position, screechRadius, LayerMask.GetMask("Player"));
-        foreach (var c in cols)
-        {
-            var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null) ps.TakeDamage(screechDamage);
+            float stopTimer = diveStoppageTime;
+            float quarterStoppage = diveStoppageTime * 0.75f;
+
+            while (stopTimer > 0f)
+            {
+                stopTimer -= Time.deltaTime;
+                if (controller != null && controller.enabled)
+                    controller.SimpleMove(Vector3.zero);
+
+                // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
+                if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
+                {
+                    animator.SetBool("Exhausted", true);
+                }
+
+                yield return null;
+            }
+
+            // Clear Exhausted boolean parameter
+            if (animator != null) animator.SetBool("Exhausted", false);
         }
+
+        // End busy state so AI can move during recovery
+        EndAction();
+
+        // Recovery time (AI can move but skill still on cooldown, gradual speed recovery)
+        if (diveRecoveryTime > 0f)
+        {
+            lastAnySkillRecoveryStart = Time.time;
+            float recovery = diveRecoveryTime;
+            while (recovery > 0f)
+            {
+                recovery -= Time.deltaTime;
+                yield return null;
+            }
+            lastAnySkillRecoveryEnd = Time.time;
+        }
+        else
+        {
+            lastAnySkillRecoveryEnd = Time.time;
+        }
+
+        activeAbility = null;
+        lastDiveTime = Time.time;
     }
 
-    // Helpers for facing
-    private bool IsFacingTarget(Transform target, float maxAngle)
+    #endregion
+
+    protected override float GetMoveSpeed()
     {
-        Vector3 to = target.position - transform.position;
-        to.y = 0f;
-        if (to.sqrMagnitude < 0.0001f) return false;
-        float angle = Vector3.Angle(new Vector3(transform.forward.x, 0f, transform.forward.z).normalized, to.normalized);
-        return angle <= Mathf.Clamp(maxAngle, 1f, 60f);
-    }
-    private void FaceTarget(Transform target)
-    {
-        Vector3 look = new Vector3(target.position.x, transform.position.y, target.position.z);
-        Vector3 dir = (look - transform.position);
-        if (dir.sqrMagnitude > 0.0001f)
+        // Return 0 if AI is busy or has active ability (should be stopped)
+        if (isBusy || globalBusyTimer > 0f || activeAbility != null || basicRoutine != null)
         {
-            Quaternion targetRot = Quaternion.LookRotation(dir);
-            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotationSpeedDegrees * Time.deltaTime);
+            return 0f;
         }
-        // Pause movement when not facing
-        if (controller != null && controller.enabled)
-            controller.SimpleMove(Vector3.zero);
+
+        // If AI is idle (not patrolling or chasing), return 0
+        if (aiState == AIState.Idle)
+        {
+            return 0f;
+        }
+
+        float baseSpeed = base.GetMoveSpeed();
+
+        // If we're in recovery phase, gradually increase speed from 0.3 to 1.0
+        if (Time.time >= lastAnySkillRecoveryStart && Time.time <= lastAnySkillRecoveryEnd && lastAnySkillRecoveryStart >= 0f)
+        {
+            float recoveryDuration = lastAnySkillRecoveryEnd - lastAnySkillRecoveryStart;
+            if (recoveryDuration > 0f)
+            {
+                float elapsed = Time.time - lastAnySkillRecoveryStart;
+                float progress = Mathf.Clamp01(elapsed / recoveryDuration);
+                float speedMultiplier = Mathf.Lerp(0.3f, 1.0f, progress);
+                return baseSpeed * speedMultiplier;
+            }
+        }
+
+        return baseSpeed;
     }
 }

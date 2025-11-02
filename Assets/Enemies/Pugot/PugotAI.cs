@@ -45,11 +45,6 @@ public class PugotAI : BaseEnemyAI
     public float graveStepPreferredMaxDistance = 6.5f;
     [Range(0f, 1f)] public float graveStepSkillWeight = 0.85f;
     [SerializeField] private float graveStepStoppageTime = 1f;
-    [Header("Spacing")]
-    public float preferredDistance = 3.7f;
-    [Range(0.1f,2f)] public float backoffSpeedMultiplier = 1.0f;
-    [Header("Facing")]
-    [Range(1f,60f)] public float specialFacingAngle = 20f;
 
     private float lastHeadTime = -9999f;
     private float lastGraveTime = -9999f;
@@ -120,7 +115,7 @@ public class PugotAI : BaseEnemyAI
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
         float dist = Vector3.Distance(transform.position, target.position);
-        bool facingTarget = IsFacingTarget(target, specialFacingAngle);
+        bool facingTarget = IsFacingTarget(target, SpecialFacingAngle);
         bool inHeadRange = dist >= headThrowPreferredMinDistance && dist <= headThrowPreferredMaxDistance;
         bool inGraveRange = dist >= graveStepPreferredMinDistance && dist <= graveStepPreferredMaxDistance;
         float headMid = (headThrowPreferredMinDistance + headThrowPreferredMaxDistance) * 0.5f;
@@ -246,7 +241,7 @@ public class PugotAI : BaseEnemyAI
         if (dir.sqrMagnitude > 0.0001f)
         {
             Quaternion targetRot = Quaternion.LookRotation(dir);
-            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotationSpeedDegrees * Time.deltaTime);
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, RotationSpeed * Time.deltaTime);
         }
         if (controller != null && controller.enabled)
             controller.SimpleMove(Vector3.zero);

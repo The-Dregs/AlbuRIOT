@@ -14,8 +14,13 @@ public class EnemyData : ScriptableObject
     [Header("Movement/Combat")]
     public float moveSpeed = 3.5f;
     public float chaseSpeed = 2.5f;
+    public float patrolSpeed = 2f;
     public float rotationSpeedDegrees = 360f;
     public float backoffSpeedMultiplier = 0.6f;
+    [Header("Chase/Orbit")]
+    public bool orbitWhenOnCooldown = true;
+    [Range(0.1f, 2f)] public float orbitSpeedMultiplier = 0.7f;
+    [Range(0.5f, 1f)] public float desiredAttackDistanceFraction = 0.85f;
     [Header("Combat")]
     public float attackRange = 2.2f;
     public float attackWindup = 0.3f;
@@ -29,6 +34,7 @@ public class EnemyData : ScriptableObject
     public float patrolWait = 1.5f;
     [Header("AI Selection")]
     public float specialFacingAngle = 20f;
+    public float preferredDistance = 3.0f;
     
     [Header("AI Behavior")]
     [Range(0f, 1f)]

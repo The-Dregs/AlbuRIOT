@@ -31,11 +31,6 @@ public class MinokawaAI : BaseEnemyAI
     public float wingsPreferredMaxDistance = 7f;
     [Range(0f, 1f)] public float wingsSkillWeight = 0.85f;
     [SerializeField] private float wingsStoppageTime = 1f;
-    [Header("Spacing")]
-    public float preferredDistance = 3.8f;
-    [Range(0.1f,2f)] public float backoffSpeedMultiplier = 1.0f;
-    [Header("Facing")]
-    [Range(1f,60f)] public float specialFacingAngle = 20f;
 
     private float lastSolarTime = -9999f;
     private float lastWingsTime = -9999f;
@@ -100,7 +95,7 @@ public class MinokawaAI : BaseEnemyAI
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
         float dist = Vector3.Distance(transform.position, target.position);
-        bool facingTarget = IsFacingTarget(target, specialFacingAngle);
+        bool facingTarget = IsFacingTarget(target, SpecialFacingAngle);
         bool inSolarRange = dist >= solarPreferredMinDistance && dist <= solarPreferredMaxDistance;
         bool inWingsRange = dist >= wingsPreferredMinDistance && dist <= wingsPreferredMaxDistance;
         float solarMid = (solarPreferredMinDistance + solarPreferredMaxDistance) * 0.5f;
@@ -182,7 +177,7 @@ public class MinokawaAI : BaseEnemyAI
         if (dir.sqrMagnitude > 0.0001f)
         {
             Quaternion targetRot = Quaternion.LookRotation(dir);
-            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotationSpeedDegrees * Time.deltaTime);
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, RotationSpeed * Time.deltaTime);
         }
         if (controller != null && controller.enabled)
             controller.SimpleMove(Vector3.zero);

@@ -54,7 +54,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!224 &5861155233889218534
 RectTransform:
   m_ObjectHideFlags: 0
@@ -260,7 +260,7 @@ RectTransform:
   m_Father: {fileID: 7914253467121387528}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
-  m_AnchorMax: {x: 1, y: 1}
+  m_AnchorMax: {x: 0, y: 0}
   m_AnchoredPosition: {x: 0, y: 0}
   m_SizeDelta: {x: 10, y: 0}
   m_Pivot: {x: 0.5, y: 0.5}
@@ -676,20 +676,16 @@ MonoBehaviour:
   animator: {fileID: 6872736158022159603}
   speedParam: Speed
   attackTrigger: Attack
+  attackWindupTrigger: AttackWindup
+  attackImpactTrigger: AttackImpact
   hitTrigger: Hit
   dieTrigger: Die
   isDeadBool: IsDead
   showDebugInfo: 0
-  rotationSpeedDegrees: 500
-  patrolSpeed: 1
-  chaseSpeed: 2.5
-  orbitWhenOnCooldown: 1
-  orbitSpeedMultiplier: 0.5
-  desiredAttackDistanceFraction: 0.95
-  buffDamageVFXPrefab: {fileID: 0}
-  buffSpeedVFXPrefab: {fileID: 0}
-  buffStaminaVFXPrefab: {fileID: 0}
-  buffHealthVFXPrefab: {fileID: 0}
+  buffDamageVFXPrefab: {fileID: 5433017580198672396, guid: 7440468fe76adc64b81167a34cb91a10, type: 3}
+  buffSpeedVFXPrefab: {fileID: 8652154132609600191, guid: 5efed870bd862c242bd383e8f497d4d2, type: 3}
+  buffStaminaVFXPrefab: {fileID: 5758305392496111728, guid: 8be7207037ab8b44484315c336527a8d, type: 3}
+  buffHealthVFXPrefab: {fileID: 3024800097872928849, guid: 4d542573c3b4532419c42b2ada6c6f2a, type: 3}
   buffVfxOffset: {x: 0, y: 0, z: 0}
   buffVfxScale: 1.5
   vortexTickDamage: 2
@@ -740,9 +736,6 @@ MonoBehaviour:
   floodPreferredMaxDistance: 7
   vortexSkillWeight: 0.6
   floodSkillWeight: 0.8
-  preferredDistance: 2.6
-  backoffSpeedMultiplier: 1
-  specialFacingAngle: 20
 --- !u!95 &6872736158022159603
 Animator:
   serializedVersion: 7

@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 49583e7f51600d243807eff9b726b809, type: 3}
   m_Name: Lily
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
-  itemName: Lunar Lillies
+  itemName: Lunar Lily
   description: Flowers believed to have cleansing properties.
   icon: {fileID: 0}
   itemType: 0

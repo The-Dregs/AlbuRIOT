@@ -31,6 +31,12 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
     private float healthRegenAccumulator = 0f;
     private bool healthRegenWasActive = false; // for debug logs
 
+    // --- exhausted state (stamina-based) ---
+    [Header("exhausted state")]
+    [Tooltip("Stamina threshold to exit exhausted state (as fraction of max stamina, e.g., 0.125 = 1/8)")] 
+    public float exhaustedRecoveryThreshold = 0.125f; // 1/8 = 12.5%
+    private bool isExhausted = false;
+    
     // --- status effects / debuffs ---
     [Header("status effects")]
     [Tooltip("applies a percent slowdown (0..1) to movement speed")] public float slowPercent = 0f; // cumulative (max wins)
@@ -54,6 +60,10 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
     {
         if (photonView != null && !photonView.IsMine) return;
         TickDebuffs();
+        
+        // Update exhausted state based on stamina
+        UpdateExhaustedState();
+        
         // countdown delay timer
         if (staminaRegenDelayTimer > 0f)
         {
@@ -187,6 +197,51 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
         if (currentStamina > maxStamina) currentStamina = maxStamina;
     }
 
+    // Update exhausted state based on stamina
+    private void UpdateExhaustedState()
+    {
+        if (isDead) return; // Can't be exhausted when dead
+        
+        bool shouldBeExhausted = currentStamina <= 0;
+        float recoveryThreshold = maxStamina * exhaustedRecoveryThreshold;
+        bool canExitExhausted = currentStamina >= recoveryThreshold;
+        
+        // Enter exhausted state when stamina hits 0
+        if (shouldBeExhausted && !isExhausted)
+        {
+            isExhausted = true;
+            // Update animator
+            if (animator != null && AnimatorHasParameter("IsExhausted"))
+            {
+                animator.SetBool("IsExhausted", true);
+            }
+            Debug.Log("[PlayerStats] Player exhausted (stamina = 0)");
+        }
+        // Maintain exhausted state and slow while stamina is below threshold
+        else if (isExhausted && !canExitExhausted)
+        {
+            // Maintain exhausted slow (20% speed reduction) while exhausted
+            if (slowPercent < 0.2f) slowPercent = 0.2f;
+        }
+        // Exit exhausted state when stamina recovers to 1/8 threshold
+        else if (!shouldBeExhausted && isExhausted && canExitExhausted)
+        {
+            isExhausted = false;
+            // Remove exhausted slow (only if no other slow debuffs)
+            if (slowPercent <= 0.2f && rootRemaining <= 0f)
+            {
+                slowPercent = 0f;
+            }
+            
+            // Update animator
+            if (animator != null && AnimatorHasParameter("IsExhausted"))
+            {
+                animator.SetBool("IsExhausted", false);
+            }
+            Debug.Log($"[PlayerStats] Player recovered from exhaustion (stamina = {currentStamina}, threshold = {recoveryThreshold})");
+        }
+    }
+    
     // debuff ticking and application
     private void TickDebuffs()
     {
@@ -452,6 +507,7 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
     }
 
     // convenience accessors for controllers
+    public bool IsExhausted => isExhausted;
     public bool IsStunned => stunRemaining > 0f;
     public bool IsRooted => rootRemaining > 0f || IsStunned;
     public bool IsSilenced => silenceRemaining > 0f || IsStunned;

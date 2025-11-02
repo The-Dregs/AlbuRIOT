@@ -71,11 +71,6 @@ public class BerberokaAI : BaseEnemyAI
     private AudioSource audioSource;
     private bool vortexActive = false; // allow movement while active but block other specials
 
-    [Header("Spacing")]
-    public float preferredDistance = 3.0f; // keep at least this far from target
-    [Range(0.1f,2f)] public float backoffSpeedMultiplier = 0.6f;
-    [Header("Facing")]
-    [Range(1f,60f)] public float specialFacingAngle = 20f; // must face target within this angle to trigger specials
 
     protected override void InitializeEnemy()
     {
@@ -121,7 +116,7 @@ public class BerberokaAI : BaseEnemyAI
         if (Time.time - lastAttackTime < enemyData.attackCooldown) return;
         var target = blackboard.Get<Transform>("target");
         if (target == null) return;
-        if (!IsFacingTarget(target, specialFacingAngle))
+        if (!IsFacingTarget(target, SpecialFacingAngle))
         {
             FaceTarget(target);
             return; // wait until faced
@@ -169,7 +164,7 @@ public class BerberokaAI : BaseEnemyAI
         if (Time.time - lastVortexTime < vortexCooldown) return false;
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
-        if (!IsFacingTarget(target, specialFacingAngle)) return false;
+        if (!IsFacingTarget(target, SpecialFacingAngle)) return false;
         return Vector3.Distance(transform.position, target.position) <= vortexRadius + 1.5f;
     }
 
@@ -228,7 +223,7 @@ public class BerberokaAI : BaseEnemyAI
                 if (dir.sqrMagnitude > 0.0001f)
                 {
                     Quaternion r = Quaternion.LookRotation(dir);
-                    transform.rotation = Quaternion.RotateTowards(transform.rotation, r, rotationSpeedDegrees * Time.deltaTime);
+                    transform.rotation = Quaternion.RotateTowards(transform.rotation, r, RotationSpeed * Time.deltaTime);
                 }
             }
             // grow indicator
@@ -318,7 +313,7 @@ public class BerberokaAI : BaseEnemyAI
         if (Time.time - lastFloodTime < floodCrashCooldown) return false;
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
-        if (!IsFacingTarget(target, specialFacingAngle)) return false;
+        if (!IsFacingTarget(target, SpecialFacingAngle)) return false;
         return Vector3.Distance(transform.position, target.position) <= floodCrashRange + 0.5f;
     }
 
@@ -370,7 +365,7 @@ public class BerberokaAI : BaseEnemyAI
                 if (dir.sqrMagnitude > 0.0001f)
                 {
                     Quaternion r = Quaternion.LookRotation(dir);
-                    transform.rotation = Quaternion.RotateTowards(transform.rotation, r, rotationSpeedDegrees * Time.deltaTime);
+                    transform.rotation = Quaternion.RotateTowards(transform.rotation, r, RotationSpeed * Time.deltaTime);
                 }
             }
             if (floodIndicator != null && floodIndicatorTimer < floodIndicatorGrowTime)
@@ -446,11 +441,11 @@ public class BerberokaAI : BaseEnemyAI
         Vector3 to = target.position - transform.position;
         to.y = 0f;
         float dist = to.magnitude;
-        if (dist < Mathf.Max(0.1f, preferredDistance))
+        if (dist < Mathf.Max(0.1f, PreferredDistance))
         {
             if (attackLockTimer > 0f || isBusy) return NodeState.Running;
             Vector3 dir = -to.normalized;
-            float speed = GetMoveSpeed() * Mathf.Clamp(backoffSpeedMultiplier, 0.1f, 2f);
+            float speed = GetMoveSpeed() * Mathf.Clamp(BackoffSpeedMultiplier, 0.1f, 2f);
             controller.SimpleMove(dir * speed);
             // face target while backing off
             Vector3 lookTarget = new Vector3(target.position.x, transform.position.y, target.position.z);
@@ -458,7 +453,7 @@ public class BerberokaAI : BaseEnemyAI
             if (dirToLook.sqrMagnitude > 0.0001f)
             {
                 Quaternion targetRot = Quaternion.LookRotation(dirToLook);
-                transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotationSpeedDegrees * Time.deltaTime);
+                transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, RotationSpeed * Time.deltaTime);
             }
             aiState = AIState.Chase;
             return NodeState.Running;
@@ -481,7 +476,7 @@ public class BerberokaAI : BaseEnemyAI
         if (target == null) return false;
         float dist = Vector3.Distance(transform.position, target.position);
         if (dist > enemyData.attackRange + 0.5f) return false;
-        return IsFacingTarget(target, specialFacingAngle);
+        return IsFacingTarget(target, SpecialFacingAngle);
     }
 
     private void FaceTarget(Transform target)
@@ -491,7 +486,7 @@ public class BerberokaAI : BaseEnemyAI
         if (dir.sqrMagnitude > 0.0001f)
         {
             Quaternion targetRot = Quaternion.LookRotation(dir);
-            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotationSpeedDegrees * Time.deltaTime);
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, RotationSpeed * Time.deltaTime);
         }
         // Pause movement when not facing
         if (controller != null && controller.enabled)

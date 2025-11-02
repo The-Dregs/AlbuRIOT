@@ -51,8 +51,8 @@ public static class EnemyFactory
             case EnemyType.Pugot:
                 enemyAI = enemyObject.AddComponent<PugotAI>();
                 break;
-            case EnemyType.CorruptedDiwata:
-                enemyAI = enemyObject.AddComponent<CorruptedDiwataAI>();
+            case EnemyType.Sirena:
+                enemyAI = enemyObject.AddComponent<SirenaAI>();
                 break;
             case EnemyType.Sigbin:
                 enemyAI = enemyObject.AddComponent<SigbinAI>();
@@ -165,7 +165,7 @@ public static class EnemyFactory
             case EnemyType.Wakwak: return "Wakwak";
             case EnemyType.Sarimanok: return "Sarimanok";
             case EnemyType.Pugot: return "Pugot";
-            case EnemyType.CorruptedDiwata: return "Corrupted Diwata";
+            case EnemyType.Sirena: return "Sirena";
             case EnemyType.Sigbin: return "Sigbin";
             case EnemyType.Manananggal: return "Manananggal";
             case EnemyType.Kapre: return "Kapre";
@@ -199,7 +199,7 @@ public enum EnemyType
     Wakwak,
     Sarimanok,
     Pugot,
-    CorruptedDiwata,
+    Sirena,
     Sigbin,
     Manananggal,
     Kapre,

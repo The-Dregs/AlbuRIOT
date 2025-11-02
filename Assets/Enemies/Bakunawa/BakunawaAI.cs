@@ -31,11 +31,6 @@ public class BakunawaAI : BaseEnemyAI
     [Range(0f, 1f)] public float tsunamiRoarSkillWeight = 0.80f;
     [SerializeField] private float lunarDevourStoppageTime = 1f;
     [SerializeField] private float tsunamiRoarStoppageTime = 1f;
-    [Header("Spacing")]
-    public float preferredDistance = 5.0f;
-    [Range(0.1f,2f)] public float backoffSpeedMultiplier = 0.8f;
-    [Header("Facing")]
-    [Range(1f,60f)] public float specialFacingAngle = 20f;
 
     [Header("Animation")]
     public string lunarDevourTrigger = "LunarDevour";
@@ -119,7 +114,7 @@ public class BakunawaAI : BaseEnemyAI
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
         float dist = Vector3.Distance(transform.position, target.position);
-        bool facingTarget = IsFacingTarget(target, specialFacingAngle);
+        bool facingTarget = IsFacingTarget(target, SpecialFacingAngle);
         bool inDevourRange = dist >= lunarDevourPreferredMinDistance && dist <= lunarDevourPreferredMaxDistance;
         bool inRoarRange = dist >= tsunamiRoarPreferredMinDistance && dist <= tsunamiRoarPreferredMaxDistance;
         float devourMid = (lunarDevourPreferredMinDistance + lunarDevourPreferredMaxDistance) * 0.5f;
@@ -211,7 +206,7 @@ public class BakunawaAI : BaseEnemyAI
         if (dir.sqrMagnitude > 0.0001f)
         {
             Quaternion targetRot = Quaternion.LookRotation(dir);
-            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotationSpeedDegrees * Time.deltaTime);
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, RotationSpeed * Time.deltaTime);
         }
         if (controller != null && controller.enabled)
             controller.SimpleMove(Vector3.zero);

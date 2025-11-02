@@ -46,15 +46,7 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
     // Movement
     protected Vector3 patrolTarget;
     protected float patrolWaitTimer;
-    [Header("Movement")]
-    public float rotationSpeedDegrees = 360f;
-    [Header("Speed Settings")]
-    public float patrolSpeed = 2f; // fallback when enemyData has only one speed
-    public float chaseSpeed = 0f; // 0 => use enemyData.moveSpeed
-    [Header("Chase/Orbit")]
-    public bool orbitWhenOnCooldown = true;
-    [Range(0.1f, 2f)] public float orbitSpeedMultiplier = 0.7f;
-    [Range(0.5f, 1f)] public float desiredAttackDistanceFraction = 0.85f; // push a bit closer than raw attackRange
+    // Note: Speed Settings and Chase/Orbit properties are now in EnemyData
 
     [Header("Buff VFX Prefabs (optional)")]
     public GameObject buffDamageVFXPrefab;
@@ -137,11 +129,13 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
         
         if (behaviorTree != null)
         {
-            var result = behaviorTree.Tick();
-            if (showDebugInfo)
-            {
-                Debug.Log($"[{gameObject.name}] Behavior Tree Result: {result}");
-            }
+            behaviorTree.Tick();
+            // Debug log removed to prevent console spam
+            // var result = behaviorTree.Tick();
+            // if (showDebugInfo)
+            // {
+            //     Debug.Log($"[{gameObject.name}] Behavior Tree Result: {result}");
+            // }
         }
     }
     
@@ -336,7 +330,7 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
         if (distance <= enemyData.attackRange)
         {
             bool cooldownReady = (Time.time - lastAttackTime) >= enemyData.attackCooldown;
-            float desired = Mathf.Clamp01(desiredAttackDistanceFraction) * enemyData.attackRange;
+            float desired = Mathf.Clamp01(DesiredAttackDistanceFraction) * enemyData.attackRange;
             // push closer before attacking to avoid edge-of-range stalls
             if (distance > desired)
             {
@@ -352,16 +346,16 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
                 if (pushDirToLook.sqrMagnitude > 0.0001f)
                 {
                     Quaternion targetRot = Quaternion.LookRotation(pushDirToLook);
-                    transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotationSpeedDegrees * Time.deltaTime);
+                    transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, RotationSpeed * Time.deltaTime);
                 }
                 aiState = AIState.Chase;
                 return NodeState.Running;
             }
-            if (!cooldownReady && orbitWhenOnCooldown)
+            if (!cooldownReady && OrbitWhenOnCooldown)
             {
                 Vector3 fwd = direction.sqrMagnitude > 0.0001f ? direction.normalized : transform.forward;
                 Vector3 tangent = Vector3.Cross(Vector3.up, fwd);
-                float speed = GetMoveSpeed() * Mathf.Clamp(orbitSpeedMultiplier, 0.1f, 2f);
+                float speed = GetMoveSpeed() * Mathf.Clamp(OrbitSpeedMultiplier, 0.1f, 2f);
                 if (speed <= 0f) speed = 0f; // Ensure orbit respects busy state
                 if (controller != null && controller.enabled)
                     controller.SimpleMove(tangent * speed);
@@ -371,7 +365,7 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
                 if (orbitDirToLook.sqrMagnitude > 0.0001f)
                 {
                     Quaternion targetRot = Quaternion.LookRotation(orbitDirToLook);
-                    transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotationSpeedDegrees * Time.deltaTime);
+                    transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, RotationSpeed * Time.deltaTime);
                 }
                 aiState = AIState.Chase;
                 return NodeState.Running;
@@ -395,7 +389,8 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
         if (dirToLook.sqrMagnitude > 0.0001f)
         {
             Quaternion targetRot = Quaternion.LookRotation(dirToLook);
-            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotationSpeedDegrees * Time.deltaTime);
+            float rotSpeed = enemyData != null ? enemyData.rotationSpeedDegrees : 360f;
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotSpeed * Time.deltaTime);
         }
         
         aiState = AIState.Chase;
@@ -472,7 +467,7 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
                     }
                     else
                     {
-                        if (patrolSpeed > 0f) pSpeed = Mathf.Min(pSpeed, patrolSpeed); // Use patrolSpeed as max if set
+                        if (PatrolSpeed > 0f) pSpeed = Mathf.Min(pSpeed, PatrolSpeed); // Use patrolSpeed as max if set
                         controller.SimpleMove(direction * pSpeed);
                     }
                 }
@@ -481,7 +476,7 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
                 if (lookDir.sqrMagnitude > 0.0001f)
                 {
                     Quaternion targetRot = Quaternion.LookRotation(lookDir);
-                    transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotationSpeedDegrees * Time.deltaTime);
+                    transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, RotationSpeed * Time.deltaTime);
                 }
                 aiState = AIState.Patrol;
                 return NodeState.Running;
@@ -583,7 +578,7 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
     
     protected Transform FindNearestPlayer()
     {
-        PlayerStats[] players = FindObjectsOfType<PlayerStats>();
+        PlayerStats[] players = FindObjectsByType<PlayerStats>(FindObjectsSortMode.None);
         Transform nearest = null;
         float bestDistance = float.MaxValue;
         
@@ -633,10 +628,25 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
         return false;
     }
 
+    // Helper properties for common EnemyData values
+    protected float RotationSpeed => enemyData != null ? enemyData.rotationSpeedDegrees : 360f;
+    protected float SpecialFacingAngle => enemyData != null ? enemyData.specialFacingAngle : 20f;
+    protected float PreferredDistance => enemyData != null ? enemyData.preferredDistance : 3.0f;
+    protected float BackoffSpeedMultiplier => enemyData != null ? enemyData.backoffSpeedMultiplier : 0.6f;
+    protected float PatrolSpeed => enemyData != null ? enemyData.patrolSpeed : 2f;
+    protected bool OrbitWhenOnCooldown => enemyData != null ? enemyData.orbitWhenOnCooldown : true;
+    protected float OrbitSpeedMultiplier => enemyData != null ? enemyData.orbitSpeedMultiplier : 0.7f;
+    protected float DesiredAttackDistanceFraction => enemyData != null ? enemyData.desiredAttackDistanceFraction : 0.85f;
+
     protected virtual float GetMoveSpeed()
     {
-        float baseSpeed = (chaseSpeed > 0f) ? chaseSpeed : (enemyData != null ? enemyData.moveSpeed : 3.5f);
-        return baseSpeed;
+        // Use chaseSpeed from EnemyData, fallback to moveSpeed if chaseSpeed is 0 or not set
+        if (enemyData != null)
+        {
+            float chaseSpd = enemyData.chaseSpeed;
+            return chaseSpd > 0f ? chaseSpd : enemyData.moveSpeed;
+        }
+        return 3.5f;
     }
 
     protected void SetBuffVfx(BuffType type, bool enabled, Vector3 localOffset, float scale = 1f)

@@ -302,11 +302,57 @@ public class PowerStealData
     public int healthBonus = 0;
     public int staminaBonus = 0;
 
-    public enum PowerType { Attack, Buff, Utility }
+    public enum PowerType { Attack, Buff, Utility, Mobility, Stealth, Defensive, Control, Ultimate, Heal }
     public PowerType powerType = PowerType.Attack;
+    
+    [Header("Cooldown and Charges")]
+    public float cooldown = 30f; // Base cooldown in seconds
+    public int maxCharges = 1; // Number of charges (1 = normal, >1 = multi-use)
+    public float chargeRechargeTime = 0f; // If >0, charges recharge over time
+    
+    [Header("Attack Properties")]
     public float attackRadius = 0f; // for AOE
+    public int attackDamage = 0; // Damage dealt
     public float projectileSpeed = 0f; // for projectiles
-    public float effectDuration = 0f; // for buffs/DoT
+    public float knockbackForce = 0f; // Knockback strength
+    
+    [Header("Buff Properties")]
+    public float effectDuration = 0f; // for buffs/DoT duration
+    public float buffDuration = 0f; // Duration of stat buffs
+    public bool isPassive = false; // If true, buff is always active
+    
+    [Header("Mobility Properties")]
+    public float dashDistance = 0f; // Dash distance
+    public float dashSpeed = 0f; // Dash speed multiplier
+    public float glideDuration = 0f; // Glide time
+    public float fallDamageReduction = 0f; // Percentage reduction (0-1)
+    
+    [Header("Stealth Properties")]
+    public float stealthDuration = 0f; // Invisibility duration
+    public float stealthDamageBonus = 0f; // Damage multiplier on next attack
+    
+    [Header("Defensive Properties")]
+    public float shieldDuration = 0f; // Shield/bubble duration
+    public float damageReduction = 0f; // Damage reduction (0-1)
+    public bool reflectProjectiles = false; // Can reflect projectiles
+    
+    [Header("Control Properties")]
+    public float slowPercentage = 0f; // Slow percentage (0-1)
+    public float rootDuration = 0f; // Root duration
+    public float fearDuration = 0f; // Fear/confuse duration
+    public float weaknessAmount = 0f; // Attack power reduction on enemies
+    
+    [Header("Heal Properties")]
+    public int healAmount = 0; // Instant heal
+    public float healOverTime = 0f; // Heal per second
+    public float healFieldDuration = 0f; // Healing field duration
+    public float cleanseDebuffs = 0f; // Number of debuffs to cleanse
+    
+    [Header("Ultimate Properties")]
+    public float channelDuration = 0f; // Channel time before activation
+    public float ultimateRadius = 0f; // Ultimate AoE radius
+    public bool requiresChannel = false; // If true, player must channel
+    
     [Header("Stop / Timing")]
     public float stopDuration = 0.5f; // duration to stop player when activating this power
 

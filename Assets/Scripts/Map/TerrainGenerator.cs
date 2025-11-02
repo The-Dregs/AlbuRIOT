@@ -21,6 +21,12 @@ public class TerrainGenerator : MonoBehaviour
     [Range(0f, 0.6f)] public float shorelineLow = 0.05f; // start of beach ramp
     [Range(0.05f, 0.6f)] public float shorelineHigh = 0.3f; // end of beach ramp (before grass)
     [Range(0.15f, 0.7f)] public float inlandBase = 0.38f; // inland base elevation
+    [Range(0.05f, 0.45f)] public float sandHeightThreshold = 0.25f; // physical height threshold - below this is sand (in normalized [0,1] after normalization)
+    [Range(0f, 3f)] public float maxMountainHeight = 2.0f; // max height above inlandBase (allows mountains above 1.0)
+    [Range(0f, 1f)] public float mountainIntensity = 0.5f; // strength of mountain generation
+    [Range(20f, 200f)] public float mountainScale = 80f; // feature size for mountains/hills
+    [Range(10f, 120f)] public float hillScale = 40f; // smaller scale for hills (layered on top of mountains)
+    [Range(0f, 1f)] public float hillIntensity = 0.3f; // strength of hill layer (adds detail to mountains)
 
     [Header("Beach Tuning")]
     [Range(0f, 0.12f)] public float duneAmplitude = 0.06f;
@@ -29,9 +35,14 @@ public class TerrainGenerator : MonoBehaviour
 
     [Header("Shape & Smoothness")]
     [Range(0f, 1f)] public float centerBias = 0.65f; // 1 = strong island center, 0 = no bias
-    [Range(0, 6)] public int smoothIterations = 3; // stronger blur for smoother shoreline
+    [Range(0, 10)] public int smoothIterations = 5; // stronger blur for smoother shoreline
     [Range(0f, 0.35f)] public float cavityAmount = 0.08f; // depth of inland holes/lakes
     [Range(0.2f, 2.5f)] public float cavityScale = 0.9f; // relative to islandScale
+    [Range(0.3f, 0.95f)] public float smoothnessStrength = 0.75f; // strength of smoothing passes
+    [Range(0f, 1f)] public float circularFalloff = 0.8f; // 1 = circular, 0 = square (corners trimmed)
+    [Range(0.15f, 0.6f)] public float falloffStartDistance = 0.35f; // where falloff begins (0.35 = starts 65% from center)
+    [Range(0.5f, 2f)] public float falloffSteepness = 1.2f; // how steep the falloff curve is (higher = steeper transition)
+    [Range(2, 6)] public int finalSmoothPasses = 3; // extra smoothing passes after normalization for ultra-smooth terrain
 
     [Header("Compatibility (read-only where possible)")]
     [Range(0.001f, 0.2f)] public float sandThreshold = 0.02f; // kept for other scripts; auto-derived from beachWidth
@@ -99,11 +110,11 @@ public class TerrainGenerator : MonoBehaviour
         float persistence = Mathf.Lerp(0.35f, 0.6f, Mathf.Clamp01(roughness));
         float lacunarity = Mathf.Lerp(1.8f, 2.6f, Mathf.Clamp01(roughness));
 
-        // Falloff produces an islandy shape (square mask softened towards the edges)
+        // Falloff produces an islandy shape (circular mask softened towards the edges)
         // derive falloff sharpness from centerBias to avoid harsh edges
         float aFall = Mathf.Lerp(0.9f, 1.8f, Mathf.Clamp01(centerBias));
         float bFall = Mathf.Lerp(1.4f, 2.6f, Mathf.Clamp01(centerBias));
-        float[,] falloffMap = GenerateFalloffMap(width, height, aFall, bFall);
+        float[,] falloffMap = GenerateFalloffMap(width, height, aFall, bFall, circularFalloff);
 
         sw.Restart();
         // First pass: create a continuous height field
@@ -114,8 +125,12 @@ public class TerrainGenerator : MonoBehaviour
                 float nx = (x + offX) / islandScale;
                 float ny = (y + offY) / islandScale;
                 float baseNoise = FractalNoise(nx, ny, baseOctaves, persistence, lacunarity);
-                // reduce center bias by scaling falloff influence
-                float fall = Mathf.Lerp(0f, falloffMap[x, y], Mathf.Clamp01(centerBias));
+                // Apply falloff more aggressively - scale it by centerBias but ensure it affects edges
+                float rawFall = falloffMap[x, y];
+                // Remap falloff to start later and be steeper
+                float remappedFall = Mathf.Max(0f, (rawFall - falloffStartDistance) / (1f - falloffStartDistance));
+                remappedFall = Mathf.Pow(remappedFall, 1f / Mathf.Max(0.1f, falloffSteepness));
+                float fall = remappedFall * Mathf.Clamp01(centerBias);
                 float h = Mathf.Clamp01(baseNoise - fall);
                 // pre-smooth the primary height signal to avoid harsh terraces
                 h = Mathf.SmoothStep(0f, 1f, h);
@@ -137,9 +152,9 @@ public class TerrainGenerator : MonoBehaviour
         // Optional smoothing to improve transitions
         if (smoothIterations > 0)
         {
-            SmoothHeightsInPlace(finalHeightMap, width, height, Mathf.Clamp(smoothIterations, 3, 6));
+            SmoothHeightsInPlace(finalHeightMap, width, height, Mathf.Clamp(smoothIterations, 3, 10));
             // relax edges where falloff is high to guarantee a wide shoreline ramp
-            EdgeRelax(finalHeightMap, falloffMap, width, height, 0.55f, 3, 0.6f);
+            EdgeRelax(finalHeightMap, falloffMap, width, height, 0.45f, 5, Mathf.Clamp01(smoothnessStrength * 0.95f));
         }
 
         // Auto-threshold to hit target land percent; compute classification threshold in height space
@@ -208,60 +223,136 @@ public class TerrainGenerator : MonoBehaviour
                     // inland: continuous extension from beach using base curve, plus subtle highland modulation
                     float t = Mathf.InverseLerp(grassStart, 1f, h);
                     t = t * t * (3f - 2f * t); // smootherstep
-                    heightNorm = Mathf.Lerp(inlandBase, 1.0f, t * baseCurve);
+                    float baseHeight = Mathf.Lerp(inlandBase, 1.0f, t * baseCurve);
 
                     // add micro-terrain variation only in highlands so it doesn't affect beaches
                     float hx = (x + offX * 0.63f) / (islandScale * 0.42f);
                     float hy = (y + offY * 0.63f) / (islandScale * 0.42f);
                     float highland = FractalNoise(hx, hy, 4, 0.53f, 2.15f) - 0.5f; // [-0.5,0.5]
                     float amp = Mathf.Lerp(0.02f, 0.12f, Mathf.Clamp01(roughness));
-                    heightNorm = Mathf.Clamp01(heightNorm + highland * amp * t);
+                    heightNorm = baseHeight + highland * amp * t;
+
+                    // Add mountains and hills on top of grass area - can exceed 1.0
+                    if (mountainIntensity > 0f && t > 0.2f) // only on inland areas
+                    {
+                        // Base mountain layer - larger features
+                        float mountainX = (x + offX * 0.31f) / (Mathf.Max(20f, mountainScale));
+                        float mountainY = (y + offY * 0.31f) / (Mathf.Max(20f, mountainScale));
+                        float mountainNoise = FractalNoise(mountainX, mountainY, 5, 0.6f, 2.3f);
+                        
+                        // Second layer - hills with smaller scale for detail
+                        float hillX = (x + offX * 0.47f) / (Mathf.Max(10f, hillScale));
+                        float hillY = (y + offY * 0.47f) / (Mathf.Max(10f, hillScale));
+                        float hillNoise = FractalNoise(hillX, hillY, 4, 0.55f, 2.2f);
+                        
+                        // Create mountain peaks that vary by height - stronger in higher areas
+                        float mountainMask = Mathf.SmoothStep(0.3f, 0.85f, t); // stronger mountains in high areas
+                        
+                        // Base mountain elevation
+                        float mountainElevation = (mountainNoise - 0.3f) * mountainMask; // bias toward positive
+                        mountainElevation = Mathf.Max(0f, mountainElevation); // only add, don't subtract
+                        mountainElevation *= mountainIntensity * maxMountainHeight;
+                        
+                        // Layer hills on top - scaled relative to mountain height for natural variation
+                        float hillMask = mountainMask * Mathf.Clamp01(hillIntensity);
+                        float hillElevation = (hillNoise - 0.2f) * hillMask; // hills can add detail
+                        hillElevation = Mathf.Max(0f, hillElevation);
+                        // Hills scale with mountain elevation - create peaks and valleys
+                        hillElevation *= maxMountainHeight * 0.4f * hillIntensity;
+                        
+                        // Combine both layers
+                        heightNorm += mountainElevation + hillElevation;
+                    }
                 }
 
                 // Enforce a world-edge ramp using the falloff map (prevents cliffs regardless of noise)
                 // fall=0 center, 1 at edges. Blend targetEdge curve as fall approaches 1
                 float fall = edgeFactor;
-                // earlier start + stronger blend for a wider, smoother coastal ramp
-                float rampT = Mathf.SmoothStep(0.45f, 0.985f, fall);
-                // target edge curve widens the shallow shelf then rises toward shorelineLow
-                float edgeInner = Mathf.SmoothStep(0.35f, 0.95f, 1f - fall);
-                float targetEdge = Mathf.Lerp(underwaterDepth, shorelineLow, edgeInner);
-                heightNorm = Mathf.Lerp(heightNorm, targetEdge, Mathf.Clamp01(rampT));
+                
+                // Remap falloff to start earlier and transition more smoothly to underwater
+                float remappedFall = Mathf.Max(0f, (fall - falloffStartDistance) / (1f - falloffStartDistance));
+                remappedFall = Mathf.Pow(remappedFall, 1f / Mathf.Max(0.1f, falloffSteepness));
+                
+                // Start blending earlier for smoother transition
+                float rampT = Mathf.SmoothStep(falloffStartDistance * 0.8f, 0.99f, fall);
+                
+                // Calculate target height at this falloff distance
+                // Near center (fall < falloffStartDistance): keep original height
+                // At edges (fall = 1): go to underwaterDepth
+                // In between: smooth transition from shorelineLow to underwaterDepth
+                float edgeProgression = Mathf.SmoothStep(0f, 1f, remappedFall);
+                float intermediateHeight = Mathf.Lerp(shorelineLow, underwaterDepth, edgeProgression * 0.7f); // transition zone
+                float targetEdge = Mathf.Lerp(intermediateHeight, underwaterDepth, edgeProgression * edgeProgression); // stronger pull at edges
+                
+                // Blend more strongly as we approach edges
+                float blendStrength = Mathf.SmoothStep(0f, 1f, remappedFall);
+                heightNorm = Mathf.Lerp(heightNorm, targetEdge, blendStrength * rampT);
 
-                physical[x, y] = Mathf.Clamp01(heightNorm);
+                // Allow heights above 1.0 for mountains, but clamp negative values
+                physical[x, y] = Mathf.Max(0f, heightNorm);
             }
         }
         // extra shoreline softening pass: blur only low-to-mid elevations to avoid sharp cliffs
-        ShorelineSoftenInPlace(physical, width, height, grassStart, 2);
-        AdaptiveLowlandSmoothing(physical, width, height, Mathf.Max(shorelineHigh + 0.02f, grassStart + 0.04f), 6, 0.5f);
+        ShorelineSoftenInPlace(physical, width, height, grassStart, 4);
+        AdaptiveLowlandSmoothing(physical, width, height, Mathf.Max(shorelineHigh + 0.02f, grassStart + 0.04f), 10, Mathf.Clamp01(smoothnessStrength));
         // ensure continuity exactly around elevation control thresholds regardless of values
-        IsocontourSmoothing(physical, finalHeightMap, width, height, sandThreshold, grassStart, beachWidth * 1.25f, 2);
+        IsocontourSmoothing(physical, finalHeightMap, width, height, sandThreshold, grassStart, beachWidth * 1.35f, 4);
+        
+        // Normalize heights to [0,1] for Unity terrain, preserving mountain variations
+        float maxHeight = 0f;
+        for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
+                maxHeight = Mathf.Max(maxHeight, physical[x, y]);
+        
+        if (maxHeight > 0.0001f)
+        {
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                    physical[x, y] = physical[x, y] / maxHeight;
+        }
+        
+        // Final smoothing pass after normalization to eliminate any stepped artifacts
+        // This is critical for smooth terrain, especially with high heightMultiplier
+        if (finalSmoothPasses > 0)
+        {
+            SmoothHeightsInPlace(physical, width, height, finalSmoothPasses);
+            // Additional gentle pass for ultra-smooth transitions
+            AdaptiveLowlandSmoothing(physical, width, height, 1.0f, 2, 0.4f); // smooth everywhere gently
+        }
+        
         terrainData.SetHeights(0, 0, physical);
         sw.Stop();
         double msApplyHeight = sw.Elapsed.TotalMilliseconds;
         int totalBlocks = width * height;
 
+        // Calculate sand threshold in normalized physical height space (before splatmap generation)
+        float sandPhysicalThreshold = sandHeightThreshold;
+        float grassPhysicalStart = sandPhysicalThreshold + (beachWidth * 0.5f); // transition zone
+
         sw.Restart();
         float[,,] splatmap = new float[width, width, 4];
+        
         for (int y = 0; y < width; y++)
         {
             for (int x = 0; x < width; x++)
             {
-                float h = finalHeightMap[x, y];
+                // Use physical height for texture assignment (not noise value)
+                float physicalH = physical[x, y];
                 float[] weights = new float[4];
-                if (h < sandThreshold)
+                
+                if (physicalH < sandPhysicalThreshold)
                 {
-                    weights[0] = 1f; // sand
+                    weights[0] = 1f; // sand below threshold
                 }
-                else if (h < grassStart)
+                else if (physicalH < grassPhysicalStart)
                 {
-                    // smooth beach->grass transition; keep sand visible and pick grass via probabilities
-                    float t = Mathf.InverseLerp(sandThreshold, grassStart, h);
+                    // smooth beach->grass transition
+                    float t = Mathf.InverseLerp(sandPhysicalThreshold, grassPhysicalStart, physicalH);
                     float edgeFactor = Mathf.Clamp01(falloffMap[x, y]);
-                    float elevatedSandBoost = 0.12f * Mathf.SmoothStep(0.6f, 1.0f, edgeFactor);
-                    weights[0] = Mathf.Clamp01((1f - t) * 0.9f + elevatedSandBoost);
+                    float elevatedSandBoost = 0.15f * Mathf.SmoothStep(0.6f, 1.0f, edgeFactor);
+                    weights[0] = Mathf.Clamp01((1f - t) * 0.95f + elevatedSandBoost);
 
-                    // stochastic, non-tiled selector by fBm noise in world scale
+                    // stochastic grass selector
                     float gnx = (x + offX * 0.71f) / (islandScale * Mathf.Max(0.15f, grassNoiseScale));
                     float gny = (y + offY * 0.71f) / (islandScale * Mathf.Max(0.15f, grassNoiseScale));
                     float r = FractalNoise(gnx, gny, 2, 0.55f, 2.15f);
@@ -278,11 +369,11 @@ public class TerrainGenerator : MonoBehaviour
                     float mx = (x + offX * 0.37f) / (islandScale * 0.6f);
                     float my = (y + offY * 0.37f) / (islandScale * 0.6f);
                     float mNoise = FractalNoise(mx, my, baseOctaves + 1, persistence, lacunarity);
-                    // rocky zones appear sparsely and mainly in mid/highlands, not by a large height band
-                    bool rocky = (mNoise > 0.82f) && (finalHeightMap[x, y] > grassStart + 0.05f);
+                    // rocky zones appear sparsely and mainly in mid/highlands
+                    bool rocky = (mNoise > 0.82f) && (physicalH > grassPhysicalStart + 0.05f);
                     float p1 = Mathf.Clamp01(grass1Prob);
                     float p2 = Mathf.Clamp01(grass2Prob);
-                    float p3 = Mathf.Clamp01(grass3Prob * 0.6f); // slightly reduce rock/grass3 dominance
+                    float p3 = Mathf.Clamp01(grass3Prob * 0.6f);
                     float sumP = Mathf.Max(0.0001f, p1 + p2 + p3);
                     if (rocky) { weights[3] = 1f; }
                     else {
@@ -319,8 +410,9 @@ public class TerrainGenerator : MonoBehaviour
         // sampling helper
         bool IsValidObjectSpot(int px, int py)
         {
-            float hVal = finalHeightMap[px, py];
-            if (hVal < sandThreshold + minGrassHeight) return false; // avoid sand/shore
+            // Use physical height to determine if spot is above sand level
+            float physicalH = physical[px, py];
+            if (physicalH < sandPhysicalThreshold + (minGrassHeight * 0.5f)) return false; // avoid sand/shore
             float nx2 = px / (float)width; float ny2 = py / (float)height;
             float slope = terrainData.GetSteepness(nx2, ny2);
             if (slope > maxObjectSlope) return false;
@@ -464,9 +556,11 @@ public class TerrainGenerator : MonoBehaviour
     void SmoothHeightsInPlace(float[,] map, int w, int h, int iterations)
     {
         float[,] temp = new float[w, h];
+        float smoothWeight = Mathf.Clamp01(smoothnessStrength);
+        
         for (int it = 0; it < iterations; it++)
         {
-            // horizontal pass (kernel [1,4,6,4,1]/16)
+            // horizontal pass (kernel [1,4,6,4,1]/16) - wider kernel for better smoothing
             for (int y = 0; y < h; y++)
             {
                 for (int x = 0; x < w; x++)
@@ -476,7 +570,11 @@ public class TerrainGenerator : MonoBehaviour
                     float b0 = map[x, y];
                     float c1 = map[Mathf.Min(w - 1, x + 1), y];
                     float c2 = map[Mathf.Min(w - 1, x + 2), y];
-                    temp[x, y] = (a2 + 4f * a1 + 6f * b0 + 4f * c1 + c2) / 16f;
+                    float smoothed = (a2 + 4f * a1 + 6f * b0 + 4f * c1 + c2) / 16f;
+                    
+                    // Use full smoothWeight for stronger smoothing, especially on later iterations
+                    float weight = it < iterations - 1 ? smoothWeight : Mathf.Min(1f, smoothWeight * 1.1f);
+                    temp[x, y] = Mathf.Lerp(b0, smoothed, weight);
                 }
             }
             // vertical pass back into map (same kernel)
@@ -489,7 +587,11 @@ public class TerrainGenerator : MonoBehaviour
                     float b0 = temp[x, y];
                     float c1 = temp[x, Mathf.Min(h - 1, y + 1)];
                     float c2 = temp[x, Mathf.Min(h - 1, y + 2)];
-                    map[x, y] = (a2 + 4f * a1 + 6f * b0 + 4f * c1 + c2) / 16f;
+                    float smoothed = (a2 + 4f * a1 + 6f * b0 + 4f * c1 + c2) / 16f;
+                    
+                    // Use full smoothWeight for stronger smoothing, especially on later iterations
+                    float weight = it < iterations - 1 ? smoothWeight : Mathf.Min(1f, smoothWeight * 1.1f);
+                    map[x, y] = Mathf.Lerp(b0, smoothed, weight);
                 }
             }
         }
@@ -626,19 +728,38 @@ public class TerrainGenerator : MonoBehaviour
         return total / maxValue;
     }
 
-    // generates a falloff map to create island shapes
-    float[,] GenerateFalloffMap(int width, int height, float a, float b)
+    // generates a falloff map to create island shapes (circular with trimmed corners)
+    float[,] GenerateFalloffMap(int width, int height, float a, float b, float circularity)
     {
         float[,] map = new float[width, height];
+        circularity = Mathf.Clamp01(circularity);
+        
         for (int y = 0; y < height; y++)
         {
             for (int x = 0; x < width; x++)
             {
                 float nx = x / (float)width * 2 - 1;
                 float ny = y / (float)height * 2 - 1;
-                float value = Mathf.Max(Mathf.Abs(nx), Mathf.Abs(ny));
+                
+                // Calculate both square (Chebyshev) and circular (Euclidean) distances
+                float squareDist = Mathf.Max(Mathf.Abs(nx), Mathf.Abs(ny)); // creates square/diamond
+                float circularDist = Mathf.Sqrt(nx * nx + ny * ny) / Mathf.Sqrt(2f); // normalized circular
+                
+                // Blend between square and circular based on circularity parameter
+                // Higher circularity = more circular, trims corners
+                float value = Mathf.Lerp(squareDist, circularDist, circularity);
+                
+                // Apply falloff curve - make it more aggressive near edges
                 float falloff = Mathf.Pow(value, a) / (Mathf.Pow(value, a) + Mathf.Pow(b - b * value, a));
-                map[x, y] = falloff;
+                
+                // Boost falloff near the edges to ensure proper trimming
+                if (falloff > 0.5f)
+                {
+                    float edgeBoost = Mathf.SmoothStep(0.5f, 1f, falloff);
+                    falloff = Mathf.Lerp(falloff, 1f, edgeBoost * 0.3f); // boost edges by up to 30%
+                }
+                
+                map[x, y] = Mathf.Clamp01(falloff);
             }
         }
         return map;

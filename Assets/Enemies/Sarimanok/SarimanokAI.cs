@@ -37,11 +37,6 @@ public class SarimanokAI : BaseEnemyAI
     public float feathersPreferredMaxDistance = 15f;
     [Range(0f, 1f)] public float feathersSkillWeight = 0.7f;
     [SerializeField] private float feathersStoppageTime = 1f;
-    [Header("Spacing")]
-    public float preferredDistance = 3.0f;
-    [Range(0.1f,2f)] public float backoffSpeedMultiplier = 1.0f;
-    [Header("Facing")]
-    [Range(1f,60f)] public float specialFacingAngle = 20f;
 
     private float lastCryTime = -9999f;
     private float lastFeatherTime = -9999f;
@@ -106,7 +101,7 @@ public class SarimanokAI : BaseEnemyAI
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
         float dist = Vector3.Distance(transform.position, target.position);
-        bool facingTarget = IsFacingTarget(target, specialFacingAngle);
+        bool facingTarget = IsFacingTarget(target, SpecialFacingAngle);
         bool inCryRange = dist >= cryPreferredMinDistance && dist <= cryPreferredMaxDistance;
         bool inFeathersRange = dist >= feathersPreferredMinDistance && dist <= feathersPreferredMaxDistance;
         float cryMid = (cryPreferredMinDistance + cryPreferredMaxDistance) * 0.5f;
@@ -193,7 +188,7 @@ public class SarimanokAI : BaseEnemyAI
         if (dir.sqrMagnitude > 0.0001f)
         {
             Quaternion targetRot = Quaternion.LookRotation(dir);
-            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotationSpeedDegrees * Time.deltaTime);
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, RotationSpeed * Time.deltaTime);
         }
         if (controller != null && controller.enabled)
             controller.SimpleMove(Vector3.zero);

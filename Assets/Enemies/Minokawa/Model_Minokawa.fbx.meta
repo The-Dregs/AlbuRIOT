@@ -1,14 +1,19 @@
 fileFormatVersion: 2
-guid: e20bb069623d3154c87e00c7c9d1b8db
+guid: 9038f36c7b15d084c94e2c25d24dfc52
 ModelImporter:
-  serializedVersion: 22200
+  serializedVersion: 24200
   internalIDToNameTable: []
   externalObjects:
   - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: tripo_mat_1c4626dc
+    second: {fileID: 2100000, guid: fb811c16f0e8c8947a6c0281ad2d4bbd, type: 2}
+  - first:
       type: UnityEngine:Texture2D
       assembly: UnityEngine.CoreModule
-      name: shaded
-    second: {fileID: 2800000, guid: e681bf8d301b04d4fb0b99c98c765575, type: 3}
+      name: tripo_image_1c4626dc_0
+    second: {fileID: 2800000, guid: 844efbd2512443248a5bee8c25d44594, type: 3}
   materials:
     materialImportMode: 2
     materialName: 0
@@ -61,6 +66,9 @@ ModelImporter:
     maxBonesPerVertex: 4
     minBoneWeight: 0.001
     optimizeBones: 1
+    generateMeshLods: 0
+    meshLodGenerationFlags: 0
+    maximumMeshLod: -1
     meshOptimizationFlags: -1
     indexFormat: 0
     secondaryUVAngleDistortion: 8

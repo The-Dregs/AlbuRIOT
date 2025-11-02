@@ -2,6 +2,7 @@ using UnityEngine;
 using Photon.Pun;
 using AlbuRIOT.AI.BehaviorTree;
 using System.Collections;
+using System.Collections.Generic;
 
 [RequireComponent(typeof(CharacterController))]
 [DisallowMultipleComponent]
@@ -13,45 +14,32 @@ public class WakwakAI : BaseEnemyAI
     public float descentWindup = 0.5f;
     public float descentCooldown = 8f;
     public float descentSpeed = 18f;
+    public float descentDuration = 0.8f;
     public GameObject descentWindupVFX;
     public GameObject descentImpactVFX;
-    public Vector3 descentVFXOffset = Vector3.zero;
-    public float descentVFXScale = 1.0f;
+    public Vector3 descentWindupVFXOffset = Vector3.zero;
+    public float descentWindupVFXScale = 1.0f;
+    public Vector3 descentImpactVFXOffset = Vector3.zero;
+    public float descentImpactVFXScale = 1.0f;
     public AudioClip descentWindupSFX;
     public AudioClip descentImpactSFX;
+    public string descentWindupTrigger = "DescentWindup";
     public string descentTrigger = "Descent";
-
-    [Header("Echoing Wings (close AOE)")]
-    public int wingsDamage = 10;
-    public float wingsRadius = 3.0f;
-    public float wingsWindup = 0.45f;
-    public float wingsCooldown = 9f;
-    public GameObject wingsWindupVFX;
-    public GameObject wingsImpactVFX;
-    public Vector3 wingsVFXOffset = Vector3.zero;
-    public float wingsVFXScale = 1.0f;
-    public AudioClip wingsWindupSFX;
-    public AudioClip wingsImpactSFX;
-    public string wingsTrigger = "Wings";
+    public string skillStoppageTrigger = "SkillStoppage";
 
     [Header("Skill Selection Tuning")]
-    public float descentPreferredMinDistance = 5f;
-    public float descentPreferredMaxDistance = 13f;
-    [Range(0f, 1f)] public float descentSkillWeight = 0.8f;
-    [SerializeField] private float descentStoppageTime = 1f;
-    public float wingsPreferredMinDistance = 2f;
-    public float wingsPreferredMaxDistance = 7.5f;
-    [Range(0f, 1f)] public float wingsSkillWeight = 0.7f;
-    [SerializeField] private float wingsStoppageTime = 1f;
-    [Header("Spacing")]
-    public float preferredDistance = 3.2f;
-    [Range(0.1f,2f)] public float backoffSpeedMultiplier = 1.0f;
-    [Header("Facing")]
-    [Range(1f,60f)] public float specialFacingAngle = 20f;
+    public float descentStoppageTime = 1f;
+    public float descentRecoveryTime = 0.5f;
 
     private float lastDescentTime = -9999f;
-    private float lastWingsTime = -9999f;
+    private float lastAnySkillRecoveryEnd = -9999f;
+    private float lastAnySkillRecoveryStart = -9999f;
     private AudioSource audioSource;
+    private Coroutine activeAbility;
+    private Coroutine basicRoutine;
+
+    // Debug accessors
+    public float DescentCooldownRemaining => Mathf.Max(0f, descentCooldown - (Time.time - lastDescentTime));
 
     protected override void InitializeEnemy()
     {
@@ -69,8 +57,6 @@ public class WakwakAI : BaseEnemyAI
         var basicAttack = new ActionNode(blackboard, () => { PerformBasicAttack(); return NodeState.Success; }, "basic");
         var canDescent = new ConditionNode(blackboard, CanDescent, "can_descent");
         var doDescent = new ActionNode(blackboard, () => { StartDescent(); return NodeState.Success; }, "descent");
-        var canWings = new ConditionNode(blackboard, CanWings, "can_wings");
-        var doWings = new ActionNode(blackboard, () => { StartWings(); return NodeState.Success; }, "wings");
 
         behaviorTree = new Selector(blackboard, "root")
             .Add(
@@ -80,7 +66,6 @@ public class WakwakAI : BaseEnemyAI
                     targetInDetection,
                     new Selector(blackboard, "attack_opts").Add(
                         new Sequence(blackboard, "descent_seq").Add(canDescent, doDescent),
-                        new Sequence(blackboard, "wings_seq").Add(canWings, doWings),
                         new Sequence(blackboard, "basic_seq").Add(targetInAttack, basicAttack),
                         moveToTarget
                     )
@@ -91,14 +76,46 @@ public class WakwakAI : BaseEnemyAI
 
     protected override void PerformBasicAttack()
     {
+        if (basicRoutine != null) return;
+        if (activeAbility != null) return;
+        if (isBusy || globalBusyTimer > 0f) return;
         if (enemyData == null) return;
         if (Time.time - lastAttackTime < enemyData.attackCooldown) return;
 
         var target = blackboard.Get<Transform>("target");
         if (target == null) return;
 
-        if (animator != null && HasTrigger(attackTrigger)) animator.SetTrigger(attackTrigger);
+        basicRoutine = StartCoroutine(CoBasicAttack(target));
+    }
 
+    private IEnumerator CoBasicAttack(Transform target)
+    {
+        BeginAction(AIState.BasicAttack);
+
+        // Windup animation trigger
+        if (animator != null)
+        {
+            if (HasTrigger(attackWindupTrigger))
+                animator.SetTrigger(attackWindupTrigger);
+            else if (HasTrigger(attackTrigger))
+                animator.SetTrigger(attackTrigger);
+        }
+
+        // Windup phase - freeze movement during windup
+        float windup = Mathf.Max(0f, enemyData.attackWindup);
+        while (windup > 0f)
+        {
+            windup -= Time.deltaTime;
+            if (controller != null && controller.enabled)
+                controller.SimpleMove(Vector3.zero);
+            yield return null;
+        }
+
+        // Impact animation trigger
+        if (animator != null && HasTrigger(attackImpactTrigger))
+            animator.SetTrigger(attackImpactTrigger);
+
+        // Apply damage after windup
         float radius = Mathf.Max(0.8f, enemyData.attackRange);
         Vector3 center = transform.position + transform.forward * (enemyData.attackRange * 0.5f);
         var cols = Physics.OverlapSphere(center, radius, LayerMask.GetMask("Player"));
@@ -108,146 +125,206 @@ public class WakwakAI : BaseEnemyAI
             if (ps != null) ps.TakeDamage(enemyData.basicDamage);
         }
 
+        // Post-stop using attackMoveLock duration
+        float post = Mathf.Max(0.1f, enemyData.attackMoveLock);
+        while (post > 0f)
+        {
+            post -= Time.deltaTime;
+            if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+            yield return null;
+        }
+
         lastAttackTime = Time.time;
         attackLockTimer = enemyData.attackMoveLock;
+        basicRoutine = null;
+        EndAction();
     }
 
     protected override bool TrySpecialAbilities()
     {
-        if (isBusy) return false;
-        var target = blackboard.Get<Transform>("target");
-        if (target == null) return false;
-        float dist = Vector3.Distance(transform.position, target.position);
-        bool facingTarget = IsFacingTarget(target, specialFacingAngle);
-        bool inDescentRange = dist >= descentPreferredMinDistance && dist <= descentPreferredMaxDistance;
-        bool inWingsRange = dist >= wingsPreferredMinDistance && dist <= wingsPreferredMaxDistance;
-        float descentMid = (descentPreferredMinDistance + descentPreferredMaxDistance) * 0.5f;
-        float wingsMid = (wingsPreferredMinDistance + wingsPreferredMaxDistance) * 0.5f;
-        float descentScore = (inDescentRange && facingTarget) ? (1f - Mathf.Clamp01(Mathf.Abs(descentMid - dist) / 10f)) * descentSkillWeight : 0f;
-        float wingsScore = (inWingsRange && facingTarget) ? (1f - Mathf.Clamp01(Mathf.Abs(wingsMid - dist) / 6f)) * wingsSkillWeight : 0f;
-        if (CanDescent() && descentScore >= wingsScore && descentScore > 0.15f) { StartDescent(); return true; }
-        if (CanWings() && wingsScore > descentScore && wingsScore > 0.15f) { StartWings(); return true; }
         return false;
     }
 
+    #region Silent Descent
+
     private bool CanDescent()
     {
+        if (activeAbility != null) return false;
+        if (basicRoutine != null) return false;
+        if (isBusy || globalBusyTimer > 0f) return false;
         if (Time.time - lastDescentTime < descentCooldown) return false;
+        if (Time.time - lastAnySkillRecoveryEnd < 4f) return false;
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
-        return Vector3.Distance(transform.position, target.position) <= 12f;
+        float distance = Vector3.Distance(transform.position, target.position);
+        return distance >= 5f && distance <= 12f;
     }
 
     private void StartDescent()
     {
-        lastDescentTime = Time.time;
+        if (activeAbility != null) return;
         if (enemyData != null) lastAttackTime = Time.time;
-        StartCoroutine(CoDescent());
+        activeAbility = StartCoroutine(CoDescent());
     }
 
     private IEnumerator CoDescent()
     {
-        if (animator != null && HasTrigger(descentTrigger)) animator.SetTrigger(descentTrigger);
+        BeginAction(AIState.Special1);
+
+        // Capture dive direction before windup
+        var target = blackboard.Get<Transform>("target");
+        Vector3 diveDirection = transform.forward;
+        if (target != null)
+        {
+            Vector3 toTarget = new Vector3(target.position.x, transform.position.y, target.position.z) - transform.position;
+            if (toTarget.sqrMagnitude > 0.0001f)
+            {
+                diveDirection = toTarget.normalized;
+                transform.rotation = Quaternion.LookRotation(diveDirection);
+            }
+        }
+
+        // Windup animation trigger
+        if (animator != null && HasTrigger(descentWindupTrigger)) animator.SetTrigger(descentWindupTrigger);
+        else if (animator != null && HasTrigger(descentTrigger)) animator.SetTrigger(descentTrigger);
         if (audioSource != null && descentWindupSFX != null) audioSource.PlayOneShot(descentWindupSFX);
         GameObject wind = null;
         if (descentWindupVFX != null)
         {
             wind = Instantiate(descentWindupVFX, transform);
-            wind.transform.localPosition = descentVFXOffset;
-            if (descentVFXScale > 0f) wind.transform.localScale = Vector3.one * descentVFXScale;
+            wind.transform.localPosition = descentWindupVFXOffset;
+            if (descentWindupVFXScale > 0f) wind.transform.localScale = Vector3.one * descentWindupVFXScale;
         }
-        yield return new WaitForSeconds(Mathf.Max(0f, descentWindup));
+
+        // Windup phase - lock rotation
+        float windup = Mathf.Max(0f, descentWindup);
+        while (windup > 0f)
+        {
+            windup -= Time.deltaTime;
+            transform.rotation = Quaternion.LookRotation(diveDirection);
+            if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+            yield return null;
+        }
         if (wind != null) Destroy(wind);
 
-        var target = blackboard.Get<Transform>("target");
-        Vector3 dir = target != null ? (target.position - transform.position) : transform.forward;
-        dir.y = 0f;
-        if (dir.sqrMagnitude > 0.0001f) dir.Normalize(); else dir = transform.forward;
-        float travel = 0.8f;
+        // Descent animation trigger
+        if (animator != null && HasTrigger(descentTrigger)) animator.SetTrigger(descentTrigger);
+
+        // Descend forward - move and check for hits
+        float travel = Mathf.Max(0.05f, descentDuration);
+        HashSet<PlayerStats> hitPlayers = new HashSet<PlayerStats>();
         while (travel > 0f)
         {
             travel -= Time.deltaTime;
             if (controller != null && controller.enabled)
-                controller.Move(dir * descentSpeed * Time.deltaTime);
+                controller.Move(diveDirection * descentSpeed * Time.deltaTime);
+
+            // Check for hits during descent - ONE DAMAGE PER PLAYER
             var hits = Physics.OverlapSphere(transform.position, descentHitRadius, LayerMask.GetMask("Player"));
             foreach (var h in hits)
             {
                 var ps = h.GetComponentInParent<PlayerStats>();
-                if (ps != null) ps.TakeDamage(descentDamage);
+                if (ps != null && !hitPlayers.Contains(ps))
+                {
+                    ps.TakeDamage(descentDamage);
+                    hitPlayers.Add(ps);
+                }
             }
+
             yield return null;
         }
 
+        // Impact VFX/SFX
         if (descentImpactVFX != null)
         {
             var fx = Instantiate(descentImpactVFX, transform);
-            fx.transform.localPosition = descentVFXOffset;
-            if (descentVFXScale > 0f) fx.transform.localScale = Vector3.one * descentVFXScale;
+            fx.transform.localPosition = descentImpactVFXOffset;
+            if (descentImpactVFXScale > 0f) fx.transform.localScale = Vector3.one * descentImpactVFXScale;
         }
         if (audioSource != null && descentImpactSFX != null) audioSource.PlayOneShot(descentImpactSFX);
-    }
 
-    private bool CanWings()
-    {
-        if (Time.time - lastWingsTime < wingsCooldown) return false;
-        var target = blackboard.Get<Transform>("target");
-        return target != null && Vector3.Distance(transform.position, target.position) <= wingsRadius + 1f;
-    }
-
-    private void StartWings()
-    {
-        lastWingsTime = Time.time;
-        if (enemyData != null) lastAttackTime = Time.time;
-        StartCoroutine(CoWings());
-    }
-
-    private IEnumerator CoWings()
-    {
-        if (animator != null && HasTrigger(wingsTrigger)) animator.SetTrigger(wingsTrigger);
-        if (audioSource != null && wingsWindupSFX != null) audioSource.PlayOneShot(wingsWindupSFX);
-        GameObject wind = null;
-        if (wingsWindupVFX != null)
+        // Stoppage recovery (AI frozen after attack)
+        if (descentStoppageTime > 0f)
         {
-            wind = Instantiate(wingsWindupVFX, transform);
-            wind.transform.localPosition = wingsVFXOffset;
-            if (wingsVFXScale > 0f) wind.transform.localScale = Vector3.one * wingsVFXScale;
-        }
-        yield return new WaitForSeconds(Mathf.Max(0f, wingsWindup));
-        if (wind != null) Destroy(wind);
-        if (wingsImpactVFX != null)
-        {
-            var fx = Instantiate(wingsImpactVFX, transform);
-            fx.transform.localPosition = wingsVFXOffset;
-            if (wingsVFXScale > 0f) fx.transform.localScale = Vector3.one * wingsVFXScale;
-        }
-        if (audioSource != null && wingsImpactSFX != null) audioSource.PlayOneShot(wingsImpactSFX);
+            if (animator != null && HasTrigger(skillStoppageTrigger)) animator.SetTrigger(skillStoppageTrigger);
 
-        var cols = Physics.OverlapSphere(transform.position, wingsRadius, LayerMask.GetMask("Player"));
-        foreach (var c in cols)
-        {
-            var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null) ps.TakeDamage(wingsDamage);
+            float stopTimer = descentStoppageTime;
+            float quarterStoppage = descentStoppageTime * 0.75f;
+
+            while (stopTimer > 0f)
+            {
+                stopTimer -= Time.deltaTime;
+                if (controller != null && controller.enabled)
+                    controller.SimpleMove(Vector3.zero);
+
+                // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
+                if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
+                {
+                    animator.SetBool("Exhausted", true);
+                }
+
+                yield return null;
+            }
+
+            // Clear Exhausted boolean parameter
+            if (animator != null) animator.SetBool("Exhausted", false);
         }
+
+        // End busy state so AI can move during recovery
+        EndAction();
+
+        // Recovery time (AI can move but skill still on cooldown, gradual speed recovery)
+        if (descentRecoveryTime > 0f)
+        {
+            lastAnySkillRecoveryStart = Time.time;
+            float recovery = descentRecoveryTime;
+            while (recovery > 0f)
+            {
+                recovery -= Time.deltaTime;
+                yield return null;
+            }
+            lastAnySkillRecoveryEnd = Time.time;
+        }
+        else
+        {
+            lastAnySkillRecoveryEnd = Time.time;
+        }
+
+        activeAbility = null;
+        lastDescentTime = Time.time;
     }
 
-    private bool IsFacingTarget(Transform target, float maxAngle)
+    #endregion
+
+    protected override float GetMoveSpeed()
     {
-        Vector3 to = target.position - transform.position;
-        to.y = 0f;
-        if (to.sqrMagnitude < 0.0001f) return false;
-        float angle = Vector3.Angle(new Vector3(transform.forward.x, 0f, transform.forward.z).normalized, to.normalized);
-        return angle <= Mathf.Clamp(maxAngle, 1f, 60f);
-    }
-    private void FaceTarget(Transform target)
-    {
-        Vector3 look = new Vector3(target.position.x, transform.position.y, target.position.z);
-        Vector3 dir = (look - transform.position);
-        if (dir.sqrMagnitude > 0.0001f)
+        // Return 0 if AI is busy or has active ability (should be stopped)
+        if (isBusy || globalBusyTimer > 0f || activeAbility != null || basicRoutine != null)
         {
-            Quaternion targetRot = Quaternion.LookRotation(dir);
-            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotationSpeedDegrees * Time.deltaTime);
+            return 0f;
         }
-        if (controller != null && controller.enabled)
-            controller.SimpleMove(Vector3.zero);
+
+        // If AI is idle (not patrolling or chasing), return 0
+        if (aiState == AIState.Idle)
+        {
+            return 0f;
+        }
+
+        float baseSpeed = base.GetMoveSpeed();
+
+        // If we're in recovery phase, gradually increase speed from 0.3 to 1.0
+        if (Time.time >= lastAnySkillRecoveryStart && Time.time <= lastAnySkillRecoveryEnd && lastAnySkillRecoveryStart >= 0f)
+        {
+            float recoveryDuration = lastAnySkillRecoveryEnd - lastAnySkillRecoveryStart;
+            if (recoveryDuration > 0f)
+            {
+                float elapsed = Time.time - lastAnySkillRecoveryStart;
+                float progress = Mathf.Clamp01(elapsed / recoveryDuration);
+                float speedMultiplier = Mathf.Lerp(0.3f, 1.0f, progress);
+                return baseSpeed * speedMultiplier;
+            }
+        }
+
+        return baseSpeed;
     }
 }

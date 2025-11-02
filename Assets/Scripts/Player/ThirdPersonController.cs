@@ -145,6 +145,15 @@ public class ThirdPersonController : MonoBehaviourPun
 		}
 		animator.SetBool("IsRunning", animatorRunning);
 
+		// Clear stance bools when player starts moving or jumping (allows exit from stance to idle)
+		if ((isWalking || animatorRunning || isJumping) && canMove)
+		{
+			if (AnimatorHasParameter(animator, "IsUnarmedStance"))
+				animator.SetBool("IsUnarmedStance", false);
+			if (AnimatorHasParameter(animator, "IsArmedStance"))
+				animator.SetBool("IsArmedStance", false);
+		}
+
 		// IsJumping: set true when jumping, false when grounded
 		animator.SetBool("IsJumping", isJumping);
 
@@ -179,14 +188,18 @@ public class ThirdPersonController : MonoBehaviourPun
 		}
 		if (move.sqrMagnitude > 1f) move.Normalize();
 
-		// try start roll if ctrl or 'c' is pressed and we have a move direction
-		if (!isRolling && controller.isGrounded)
+		// Check if player is attacking - prevent movement/actions during attacks
+		bool isAttacking = combat != null && combat.IsAttacking;
+
+		// try start roll if ctrl or 'c' is pressed and we have a move direction (but not while attacking or exhausted)
+		if (!isRolling && !isAttacking && controller.isGrounded)
 		{
+			bool exhausted = playerStats != null && playerStats.IsExhausted;
 			bool rollPressed = Input.GetKeyDown(rollKey) || (allowRightCtrlAlso && Input.GetKeyDown(KeyCode.RightControl)) || Input.GetKeyDown(alternateRollKey);
 			bool rooted = playerStats != null && playerStats.IsRooted;
 			bool silenced = playerStats != null && playerStats.IsSilenced;
 			bool stunned = playerStats != null && playerStats.IsStunned;
-			if (rollPressed && !rooted && !stunned && !silenced && move.sqrMagnitude > 0.001f && rollCooldownTimer <= 0f)
+			if (rollPressed && !rooted && !stunned && !silenced && !exhausted && move.sqrMagnitude > 0.001f && rollCooldownTimer <= 0f)
 			{
 				// stamina check
 				bool hasStats = playerStats != null;
@@ -220,15 +233,21 @@ public class ThirdPersonController : MonoBehaviourPun
 			}
 		}
 
-		// face movement direction during walk/run (not while rolling)
-		if (!isRolling && move.sqrMagnitude > 0.0001f)
+		// face movement direction during walk/run (not while rolling or attacking)
+		if (!isRolling && !isAttacking && move.sqrMagnitude > 0.0001f)
 		{
 			Quaternion targetRot = Quaternion.LookRotation(move.normalized, Vector3.up);
 			transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, rotationSpeed * Time.deltaTime);
 		}
 
 		Vector3 horizontal = Vector3.zero;
-		if (isRolling)
+		
+		// Stop all horizontal movement while attacking
+		if (isAttacking)
+		{
+			horizontal = Vector3.zero;
+		}
+		else if (isRolling)
 		{
 			// while rolling, override horizontal movement
 			float currentRollSpeed = rollSpeed;
@@ -245,7 +264,9 @@ public class ThirdPersonController : MonoBehaviourPun
 				// apply slow percentage to both walk and run
 				currentSpeed *= (1f - Mathf.Clamp01(playerStats.slowPercent));
 			}
-			if (isRunning)
+			// Block running when exhausted - force walking speed only
+			bool exhausted = playerStats != null && playerStats.IsExhausted;
+			if (isRunning && !exhausted)
 			{
 				currentSpeed = runSpeed;
 				if (playerStats != null)
@@ -263,8 +284,8 @@ public class ThirdPersonController : MonoBehaviourPun
 		{
 			verticalVelocity.y = -2f;
 		}
-		bool canJump = !isRolling && Input.GetKeyDown(KeyCode.Space) && isGrounded;
-		if (playerStats != null && (playerStats.IsRooted || playerStats.IsStunned)) canJump = false;
+		bool canJump = !isRolling && !isAttacking && Input.GetKeyDown(KeyCode.Space) && isGrounded;
+		if (playerStats != null && (playerStats.IsRooted || playerStats.IsStunned || playerStats.IsExhausted)) canJump = false;
 		if (canJump)
 		{
 			// stamina check for jumping
@@ -331,7 +352,9 @@ public class ThirdPersonController : MonoBehaviourPun
 		if (playerStats != null)
 		{
 			bool moving = (Mathf.Abs(Input.GetAxisRaw("Horizontal")) > 0.5f || Mathf.Abs(Input.GetAxisRaw("Vertical")) > 0.5f);
-			bool running = (canControl && canMove) && Input.GetKey(KeyCode.LeftShift) && moving && !isRolling && (playerStats == null || playerStats.currentStamina > 0);
+			bool exhausted = playerStats.IsExhausted;
+			// Block running when exhausted - player can only walk
+			bool running = (canControl && canMove) && !exhausted && Input.GetKey(KeyCode.LeftShift) && moving && !isRolling && (playerStats == null || playerStats.currentStamina > 0);
 			isRunning = running;
 			bool blockRegen = isRunning || isRolling;
 			playerStats.SetStaminaRegenBlocked(blockRegen);

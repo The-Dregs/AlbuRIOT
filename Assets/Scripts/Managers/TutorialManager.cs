@@ -1,171 +1,300 @@
 using UnityEngine;
 using TMPro;
 using Photon.Pun;
-
+using System.Collections.Generic;
 
 public class TutorialManager : MonoBehaviourPunCallbacks
 {
-    [Header("Quest UI")]
-    public GameObject questUI; // assign your quest UI GameObject (top right) in Inspector
-    public int questUITriggerIndex = 1; // set this to the trigger index that should show the quest UI
-    [Header("Health Bar Trigger")]
-    public int healthBarTriggerIndex = 0; // Set this in Inspector to match the trigger index that should enable health bar
+    [Header("Tutorial Data")]
+    [Tooltip("Tutorial data definitions - each entry defines a complete tutorial step")]
+    public TutorialData[] tutorialSteps;
 
-    [Header("Tutorial Dialogue Panels")]
-    public GameObject[] dialoguePanels; // assign all your tutorial panels here
-    public GameObject[] continuePrompts; // assign matching continue prompts for each panel
+    [Header("Legacy Support (for backwards compatibility)")]
+    [Tooltip("Old dialogue panels array - will be migrated to TutorialData")]
+    public GameObject[] dialoguePanels;
+    [Tooltip("Old continue prompts array")]
+    public GameObject[] continuePrompts;
     public float continueDelay = 1.2f;
-    private bool waitingForContinue = false;
-    private int activePanelIndex = -1;
 
-    [Header("Tutorial Trigger Areas")]
-    public Collider[] tutorialTriggers;
+    [Header("Global UI (optional - for legacy quest UI)")]
+    public GameObject questUI;
 
-    [Header("Player Prefab Tag")]
+    [Header("Player Settings")]
     public string playerTag = "Player";
 
-    private int tutorialStep = 0;
+    // Per-player dialogue tracking: PhotonView ViewID -> active tutorial data
+    private Dictionary<int, TutorialData> activePlayerTutorials = new Dictionary<int, TutorialData>();
+    private Dictionary<int, Coroutine> activeContinueCoroutines = new Dictionary<int, Coroutine>();
+    private Dictionary<int, bool> waitingForContinue = new Dictionary<int, bool>();
+    private Dictionary<int, GameObject> activeDialoguePanels = new Dictionary<int, GameObject>(); // Track panel GameObjects per player
 
     private void Start()
     {
-        // hide quest UI at start
+        // Hide all legacy panels if they exist
+        if (dialoguePanels != null)
+        {
+            foreach (var panel in dialoguePanels)
+                if (panel != null) panel.SetActive(false);
+        }
+        if (continuePrompts != null)
+        {
+            foreach (var prompt in continuePrompts)
+                if (prompt != null) prompt.SetActive(false);
+        }
+
+        // Hide global quest UI
         if (questUI != null) questUI.SetActive(false);
-        // hide all dialogue panels at start
-        if (dialoguePanels != null)
-        {
-            foreach (var panel in dialoguePanels)
-                if (panel != null) panel.SetActive(false);
-        }
-        // hide all continue prompts at start
-        if (continuePrompts != null)
-        {
-            foreach (var prompt in continuePrompts)
-                if (prompt != null) prompt.SetActive(false);
-        }
-        DisableAllPlayerUIs();
     }
 
-    private void DisableAllPlayerUIs()
+    /// <summary>
+    /// Show tutorial for a specific player (only that player will see it)
+    /// </summary>
+    public void ShowTutorialForPlayer(GameObject player, int tutorialIndex)
     {
-        var players = GameObject.FindGameObjectsWithTag(playerTag);
-        foreach (var p in players)
-        {
-            var ui = p.GetComponent<PlayerUIController>();
-            if (ui != null) ui.healthBarRoot?.SetActive(false);
-            if (ui != null) ui.skillUIRoot?.SetActive(false);
-        }
-    }
+        if (player == null) return;
 
-    // Call this when a tutorial trigger is hit to show dialogue only
+        var pv = player.GetComponent<PhotonView>();
+        // Use ViewID as unique identifier (works offline too, just uses instance ID)
+        int playerID = pv != null ? pv.ViewID : player.GetInstanceID();
 
-    // Call this to show a specific tutorial dialogue panel by index
-    public void ShowTutorialPanel(int panelIndex)
-    {
-        ApplyShowTutorialPanel(panelIndex);
-        // Sync with other players (buffered for persistence)
-        photonView.RPC("RPC_ShowTutorialPanel", RpcTarget.AllBuffered, panelIndex);
-    }
+        // Only show for local player in multiplayer
+        if (pv != null && PhotonNetwork.IsConnected && PhotonNetwork.InRoom && !pv.IsMine)
+            return;
 
-    [PunRPC]
-    public void RPC_ShowTutorialPanel(int panelIndex)
-    {
-        ApplyShowTutorialPanel(panelIndex);
-    }
-    
-    private void ApplyShowTutorialPanel(int panelIndex)
-    {
-        HideAllDialoguePanels();
-        if (dialoguePanels != null && panelIndex >= 0 && panelIndex < dialoguePanels.Length)
-        {
-            var panel = dialoguePanels[panelIndex];
-            var prompt = (continuePrompts != null && panelIndex < continuePrompts.Length) ? continuePrompts[panelIndex] : null;
-            if (panel != null) panel.SetActive(true);
-            if (prompt != null) prompt.SetActive(false);
-            waitingForContinue = false;
-            StartCoroutine(ShowContinuePromptAfterDelay(panelIndex));
-        }
-    }
-    // Example: Call this from your trigger logic
-    public void OnTutorialTrigger(int triggerIndex)
-    {
-        ShowTutorialPanel(triggerIndex);
-        if (triggerIndex == healthBarTriggerIndex)
-        {
-            EnableHealthBarUIForAllPlayers();
-        }
-        if (triggerIndex == questUITriggerIndex && questUI != null)
-        {
-            questUI.SetActive(true);
-        }
-    }
+        // Use TutorialData if available, fall back to legacy
+        TutorialData tutorialData = null;
+        GameObject dialoguePanel = null;
+        GameObject continuePrompt = null;
+        float delay = continueDelay;
 
-    private void HideAllDialoguePanels()
-    {
-        if (dialoguePanels != null)
+        if (tutorialSteps != null && tutorialIndex >= 0 && tutorialIndex < tutorialSteps.Length)
         {
-            foreach (var panel in dialoguePanels)
-                if (panel != null) panel.SetActive(false);
-        }
-        if (continuePrompts != null)
-        {
-            foreach (var prompt in continuePrompts)
-                if (prompt != null) prompt.SetActive(false);
-        }
-        waitingForContinue = false;
-        activePanelIndex = -1;
-    }
-
-
-    private System.Collections.IEnumerator ShowContinuePromptAfterDelay(int panelIndex)
-    {
-        activePanelIndex = panelIndex;
-        yield return new WaitForSeconds(continueDelay);
-        if (continuePrompts != null && panelIndex >= 0 && panelIndex < continuePrompts.Length)
-        {
-            var prompt = continuePrompts[panelIndex];
-            if (prompt != null) prompt.SetActive(true);
-        }
-        waitingForContinue = true;
-    }
-
-
-    private void Update()
-    {
-        if (waitingForContinue && activePanelIndex >= 0 && dialoguePanels != null && activePanelIndex < dialoguePanels.Length)
-        {
-            var panel = dialoguePanels[activePanelIndex];
-            if (panel != null && panel.activeSelf && Input.GetMouseButtonDown(0)) // left click only
+            tutorialData = tutorialSteps[tutorialIndex];
+            if (tutorialData != null)
             {
-                CloseDialoguePanel(activePanelIndex);
+                dialoguePanel = tutorialData.dialoguePanel;
+                continuePrompt = tutorialData.continuePrompt;
+                delay = tutorialData.continueDelay;
             }
         }
+        else if (dialoguePanels != null && tutorialIndex >= 0 && tutorialIndex < dialoguePanels.Length)
+        {
+            // Legacy support
+            dialoguePanel = dialoguePanels[tutorialIndex];
+            continuePrompt = (continuePrompts != null && tutorialIndex < continuePrompts.Length) 
+                ? continuePrompts[tutorialIndex] : null;
+        }
+
+        if (dialoguePanel == null) return;
+
+        // Hide any existing dialogue for this player
+        HideTutorialForPlayer(player);
+
+        // Show dialogue panel
+        dialoguePanel.SetActive(true);
+        if (continuePrompt != null) continuePrompt.SetActive(false);
+
+        // Track active tutorial
+        activePlayerTutorials[playerID] = tutorialData;
+        activeDialoguePanels[playerID] = dialoguePanel;
+        waitingForContinue[playerID] = false;
+
+        // Start continue prompt coroutine
+        if (activeContinueCoroutines.ContainsKey(playerID) && activeContinueCoroutines[playerID] != null)
+        {
+            StopCoroutine(activeContinueCoroutines[playerID]);
+        }
+        activeContinueCoroutines[playerID] = StartCoroutine(ShowContinuePromptAfterDelay(playerID, continuePrompt, delay));
+
+        // Apply UI actions
+        if (tutorialData != null)
+        {
+            ApplyTutorialUIActions(player, tutorialData);
+        }
+        else
+        {
+            // Legacy UI actions
+            ApplyLegacyUIActions(tutorialIndex);
+        }
     }
 
-    private void CloseDialoguePanel(int panelIndex)
+    private void ApplyTutorialUIActions(GameObject player, TutorialData data)
     {
-        if (dialoguePanels != null && panelIndex >= 0 && panelIndex < dialoguePanels.Length)
+        var uiController = player.GetComponent<PlayerUIController>();
+        
+        if (data.enableHealthBar && uiController != null && uiController.healthBarRoot != null)
         {
-            var panel = dialoguePanels[panelIndex];
-            if (panel != null) panel.SetActive(false);
+            uiController.healthBarRoot.SetActive(true);
         }
-        if (continuePrompts != null && panelIndex >= 0 && panelIndex < continuePrompts.Length)
+
+        if (data.enableSkillUI && uiController != null && uiController.skillUIRoot != null)
         {
-            var prompt = continuePrompts[panelIndex];
-            if (prompt != null) prompt.SetActive(false);
+            uiController.skillUIRoot.SetActive(true);
         }
-        waitingForContinue = false;
-        activePanelIndex = -1;
+
+        if (data.showQuestUI)
+        {
+            GameObject targetQuestUI = data.questUI != null ? data.questUI : questUI;
+            if (targetQuestUI != null) targetQuestUI.SetActive(true);
+        }
     }
 
-
-    // Call this to enable health bar UI separately
-    public void EnableHealthBarUIForAllPlayers()
+    private void ApplyLegacyUIActions(int triggerIndex)
     {
+        // Legacy health bar logic (enable for all players - but should be per-player)
         var players = GameObject.FindGameObjectsWithTag(playerTag);
         foreach (var p in players)
         {
             var ui = p.GetComponent<PlayerUIController>();
             if (ui != null && ui.healthBarRoot != null) ui.healthBarRoot.SetActive(true);
         }
+
+        // Legacy quest UI (global)
+        if (questUI != null) questUI.SetActive(true);
+    }
+
+    private System.Collections.IEnumerator ShowContinuePromptAfterDelay(int playerID, GameObject prompt, float delay)
+    {
+        yield return new WaitForSeconds(delay);
+        
+        if (prompt != null && waitingForContinue.ContainsKey(playerID))
+        {
+            prompt.SetActive(true);
+            waitingForContinue[playerID] = true;
+        }
+    }
+
+    /// <summary>
+    /// Hide tutorial for a specific player
+    /// </summary>
+    public void HideTutorialForPlayer(GameObject player)
+    {
+        if (player == null) return;
+
+        var pv = player.GetComponent<PhotonView>();
+        int playerID = pv != null ? pv.ViewID : player.GetInstanceID();
+
+        // Only hide for local player in multiplayer
+        if (pv != null && PhotonNetwork.IsConnected && PhotonNetwork.InRoom && !pv.IsMine)
+            return;
+
+        CloseDialogueForPlayer(playerID);
+    }
+
+    private void Update()
+    {
+        // Check for continue input for each active player (only local player can continue)
+        var keysToRemove = new List<int>();
+        
+        foreach (var kvp in waitingForContinue)
+        {
+            int playerID = kvp.Key;
+            bool isWaiting = kvp.Value;
+
+            if (isWaiting)
+            {
+                // Get the panel for this player
+                GameObject panel = null;
+                if (activeDialoguePanels.ContainsKey(playerID))
+                {
+                    panel = activeDialoguePanels[playerID];
+                }
+                else if (dialoguePanels != null && playerID >= 0 && playerID < dialoguePanels.Length)
+                {
+                    // Legacy fallback
+                    panel = dialoguePanels[playerID];
+                }
+
+                if (panel != null && panel.activeSelf && Input.GetMouseButtonDown(0))
+                {
+                    CloseDialogueForPlayer(playerID);
+                    keysToRemove.Add(playerID);
+                }
+            }
+        }
+
+        foreach (var key in keysToRemove)
+        {
+            waitingForContinue.Remove(key);
+        }
+    }
+
+    private void CloseDialogueForPlayer(int playerID)
+    {
+        // Hide tutorial data panel
+        if (activePlayerTutorials.ContainsKey(playerID))
+        {
+            var data = activePlayerTutorials[playerID];
+            if (data != null)
+            {
+                if (data.dialoguePanel != null) data.dialoguePanel.SetActive(false);
+                if (data.continuePrompt != null) data.continuePrompt.SetActive(false);
+            }
+            activePlayerTutorials.Remove(playerID);
+        }
+
+        // Hide tracked panel
+        if (activeDialoguePanels.ContainsKey(playerID))
+        {
+            var panel = activeDialoguePanels[playerID];
+            if (panel != null) panel.SetActive(false);
+            activeDialoguePanels.Remove(playerID);
+        }
+
+        // Legacy support
+        if (dialoguePanels != null && playerID >= 0 && playerID < dialoguePanels.Length)
+        {
+            var panel = dialoguePanels[playerID];
+            if (panel != null) panel.SetActive(false);
+        }
+        if (continuePrompts != null && playerID >= 0 && playerID < continuePrompts.Length)
+        {
+            var prompt = continuePrompts[playerID];
+            if (prompt != null) prompt.SetActive(false);
+        }
+
+        // Stop coroutine
+        if (activeContinueCoroutines.ContainsKey(playerID) && activeContinueCoroutines[playerID] != null)
+        {
+            StopCoroutine(activeContinueCoroutines[playerID]);
+            activeContinueCoroutines.Remove(playerID);
+        }
+
+        waitingForContinue.Remove(playerID);
+    }
+
+    // Legacy method for backwards compatibility
+    public void OnTutorialTrigger(int triggerIndex)
+    {
+        // Find local player
+        var localPlayer = FindLocalPlayer();
+        if (localPlayer != null)
+        {
+            ShowTutorialForPlayer(localPlayer, triggerIndex);
+        }
+    }
+
+    // Legacy method
+    public void ShowTutorialPanel(int panelIndex)
+    {
+        var localPlayer = FindLocalPlayer();
+        if (localPlayer != null)
+        {
+            ShowTutorialForPlayer(localPlayer, panelIndex);
+        }
+    }
+
+    private GameObject FindLocalPlayer()
+    {
+        var players = GameObject.FindGameObjectsWithTag(playerTag);
+        foreach (var player in players)
+        {
+            var pv = player.GetComponent<PhotonView>();
+            if (pv == null || !PhotonNetwork.IsConnected || pv.IsMine)
+            {
+                return player;
+            }
+        }
+        return players.Length > 0 ? players[0] : null;
     }
 }

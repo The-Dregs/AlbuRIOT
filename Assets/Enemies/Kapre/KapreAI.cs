@@ -55,11 +55,6 @@ public class KapreAI : BaseEnemyAI
     [Range(0f, 1f)] public float treeSlamSkillWeight = 0.8f;
     public float treeSlamStoppageTime = 1f;
     public float treeSlamRecoveryTime = 0.5f;
-    [Header("Spacing")]
-    public float preferredDistance = 4.0f;
-    [Range(0.1f,2f)] public float backoffSpeedMultiplier = 1.0f;
-    [Header("Facing")]
-    [Range(1f,60f)] public float specialFacingAngle = 20f;
 
     // Runtime state
     private float lastVanishTime = -9999f;
@@ -184,7 +179,7 @@ public class KapreAI : BaseEnemyAI
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
         float dist = Vector3.Distance(transform.position, target.position);
-        bool facingTarget = IsFacingTarget(target, specialFacingAngle);
+        bool facingTarget = IsFacingTarget(target, SpecialFacingAngle);
         bool inVanishRange = dist >= vanishPreferredMinDistance && dist <= vanishPreferredMaxDistance;
         bool inTreeSlamRange = dist >= treeSlamPreferredMinDistance && dist <= treeSlamPreferredMaxDistance;
         float vanishMid = (vanishPreferredMinDistance + vanishPreferredMaxDistance) * 0.5f;
@@ -536,7 +531,7 @@ public class KapreAI : BaseEnemyAI
         if (dir.sqrMagnitude > 0.0001f)
         {
             Quaternion targetRot = Quaternion.LookRotation(dir);
-            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotationSpeedDegrees * Time.deltaTime);
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, RotationSpeed * Time.deltaTime);
         }
         if (controller != null && controller.enabled)
             controller.SimpleMove(Vector3.zero);

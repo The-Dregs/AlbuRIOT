@@ -53,11 +53,6 @@ public class BungisngisAI : BaseEnemyAI
     [Range(0f, 1f)] public float poundSkillWeight = 0.8f;
     public float poundStoppageTime = 1f;
     public float poundRecoveryTime = 0.5f;
-    [Header("Spacing")]
-    public float preferredDistance = 3.3f;
-    [Range(0.1f,2f)] public float backoffSpeedMultiplier = 1.0f;
-    [Header("Facing")]
-    [Range(1f,60f)] public float specialFacingAngle = 20f;
 
     [Header("Laugh Projectile")]
     public GameObject laughProjectilePrefab;
@@ -184,7 +179,7 @@ public class BungisngisAI : BaseEnemyAI
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
         float dist = Vector3.Distance(transform.position, target.position);
-        bool facingTarget = IsFacingTarget(target, specialFacingAngle);
+        bool facingTarget = IsFacingTarget(target, SpecialFacingAngle);
         bool inLaughRange = dist >= laughPreferredMinDistance && dist <= laughPreferredMaxDistance;
         bool inPoundRange = dist >= poundPreferredMinDistance && dist <= poundPreferredMaxDistance;
         float laughMid = (laughPreferredMinDistance + laughPreferredMaxDistance) * 0.5f;
@@ -454,7 +449,7 @@ public class BungisngisAI : BaseEnemyAI
         if (dir.sqrMagnitude > 0.0001f)
         {
             Quaternion targetRot = Quaternion.LookRotation(dir);
-            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, rotationSpeedDegrees * Time.deltaTime);
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, RotationSpeed * Time.deltaTime);
         }
         if (controller != null && controller.enabled)
             controller.SimpleMove(Vector3.zero);

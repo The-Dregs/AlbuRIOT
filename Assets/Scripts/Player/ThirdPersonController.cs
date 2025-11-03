@@ -74,10 +74,19 @@ public class ThirdPersonController : MonoBehaviourPun
 
 	private PlayerStats playerStats;
 
+	private EquipmentManager equipmentManager;
+
 	void Start()
 	{
 		playerStats = GetComponent<PlayerStats>();
 		combat = GetComponent<PlayerCombat>();
+		equipmentManager = GetComponent<EquipmentManager>();
+
+		// Disable root motion - using manual movement
+		if (animator != null)
+		{
+			animator.applyRootMotion = false;
+		}
 
 		// Only enable camera/audio for local player
 		if (photonView != null && !photonView.IsMine)
@@ -213,7 +222,7 @@ public class ThirdPersonController : MonoBehaviourPun
 					isRolling = true;
 					rollTimer = rollDuration;
 					rollDirection = move.normalized;
-					// face roll direction instantly (only if rotation not locked)
+					// face roll direction instantly
 					if (rollDirection.sqrMagnitude > 0.001f)
 					{
 						Quaternion lookRot = Quaternion.LookRotation(rollDirection, Vector3.up);
@@ -250,9 +259,20 @@ public class ThirdPersonController : MonoBehaviourPun
 		else if (isRolling)
 		{
 			// while rolling, override horizontal movement
-			float currentRollSpeed = rollSpeed;
-			if (playerStats != null) currentRollSpeed += Mathf.Max(0f, playerStats.speedModifier);
-			horizontal = rollDirection * currentRollSpeed;
+			if (rollDirection.sqrMagnitude > 0.0001f)
+			{
+				// Lock rotation to roll direction
+				Quaternion lookRot = Quaternion.LookRotation(rollDirection, Vector3.up);
+				transform.rotation = lookRot;
+				
+				float currentRollSpeed = rollSpeed;
+				if (playerStats != null) currentRollSpeed += Mathf.Max(0f, playerStats.speedModifier);
+				horizontal = rollDirection * currentRollSpeed;
+			}
+			else
+			{
+				horizontal = Vector3.zero;
+			}
 		}
 		else
 		{
@@ -317,6 +337,7 @@ public class ThirdPersonController : MonoBehaviourPun
 
 		// do not override Esc here; handled by PauseMenuController to avoid camera drifting
 	}
+	
 
 	// utility: check animator has parameter to avoid warnings
 	private bool AnimatorHasParameter(Animator anim, string paramName)

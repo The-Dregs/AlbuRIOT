@@ -263,17 +263,16 @@ public class EquipmentManager : MonoBehaviourPun
             if (playerInventory != null)
             {
                 Debug.Log($"[equipment] Unequip| returning item={equippedItem.itemName} to inventory");
-                playerInventory.AddItem(equippedItem, 1);
+                playerInventory.AddItem(equippedItem, 1, silent: true);
             }
             if (playerStats != null) playerStats.RemoveEquipment(equippedItem);
             Debug.Log($"[equipment] Unequip| unequipped item={(equippedItem != null ? equippedItem.itemName : "null")}");
             equippedItem = null;
         }
-        // Remove visuals across clients
+        // Remove visuals locally first, then sync across clients
+        RPC_ClearModel();
         if (pv != null && (PhotonNetwork.IsConnected || PhotonNetwork.OfflineMode))
-            pv.RPC(nameof(RPC_ClearModel), RpcTarget.All);
-        else
-            RPC_ClearModel();
+            pv.RPC(nameof(RPC_ClearModel), RpcTarget.Others);
     }
 
     // Refresh/reequip the current item's model (useful if model didn't spawn correctly)

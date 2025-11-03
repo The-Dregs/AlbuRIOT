@@ -18,7 +18,16 @@ public class PlayerCombat : MonoBehaviourPun
     [SerializeField] private float comboWindow = 0.8f; // Time to continue combo after hit
     [SerializeField] private float comboInputDelay = 0.3f; // Minimum delay before next hit input can be registered
     [SerializeField] private float[] comboDamageMultipliers = { 1.0f, 1.2f, 1.5f }; // Damage multiplier per hit
-    [SerializeField] private float[] attackDurations = { 0.4f, 0.4f, 0.5f }; // Duration of each attack
+    
+    [Header("Attack Durations")]
+    [SerializeField] private float[] unarmedAttackDurations = { 0.4f, 0.4f }; // Duration of each unarmed attack (2 hits)
+    [SerializeField] private float[] armedAttackDurations = { 0.4f, 0.4f, 0.5f }; // Duration of each armed attack (3 hits)
+    
+    [Header("Hit Stop Effect")]
+    [SerializeField] private float hitStopDuration = 0.05f; // Duration of hit-stop effect when hitting enemies
+    
+    [Header("Attack Rotation")]
+    [SerializeField] private float attackRotationSpeed = 720f; // Degrees per second - fast and snappy rotation towards camera
     
     [Header("VFX Integration")]
     public VFXManager vfxManager;
@@ -27,6 +36,9 @@ public class PlayerCombat : MonoBehaviourPun
     [Header("Managers")]
     public MovesetManager movesetManager;
     private EquipmentManager equipmentManager;
+    
+    [Header("Camera")]
+    public Transform cameraPivot; // Camera pivot transform for camera-relative attacks
     
     private float nextAttackTime = 0f;
     private PlayerStats stats;
@@ -43,6 +55,14 @@ public class PlayerCombat : MonoBehaviourPun
 
     // track last damaged enemy root to attribute kills for power stealing
     public Transform LastHitEnemyRoot { get; private set; }
+    
+    // Hit-stop state
+    private Coroutine hitStopCoroutine = null;
+    private ThirdPersonController playerController;
+    
+    // Store attack start position/direction to keep damage area fixed (not affected by root motion)
+    private Vector3 attackStartPosition;
+    private Vector3 attackStartForward;
 
     void Start()
     {
@@ -64,6 +84,21 @@ public class PlayerCombat : MonoBehaviourPun
         // Auto-find equipment manager
         if (equipmentManager == null)
             equipmentManager = GetComponent<EquipmentManager>();
+            
+        // Get player controller for hit-stop
+        playerController = GetComponent<ThirdPersonController>();
+        
+        // Auto-find camera pivot from ThirdPersonController
+        if (cameraPivot == null && playerController != null)
+        {
+            var controllerType = playerController.GetType();
+            var cameraPivotField = controllerType.GetField("cameraPivot", 
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (cameraPivotField != null)
+            {
+                cameraPivot = cameraPivotField.GetValue(playerController) as Transform;
+            }
+        }
     }
 
     private bool canControl = true;
@@ -173,13 +208,18 @@ public class PlayerCombat : MonoBehaviourPun
     
     private void ContinueCombo()
     {
-        currentComboIndex++;
         int maxCombo = GetMaxComboCount();
-        if (currentComboIndex >= maxCombo)
+        
+        // Only continue if we haven't reached max combo yet
+        if (currentComboIndex >= maxCombo - 1)
         {
-            // Combo complete - this will be the final hit, then reset
-            currentComboIndex = maxCombo - 1; // Keep at max index for final hit
+            Debug.Log($"[Combo] Cannot continue - combo already at max ({maxCombo} hits). Resetting.");
+            ResetCombo();
+            StartComboAttack(); // Start a new combo instead
+            return;
         }
+        
+        currentComboIndex++;
         Debug.Log($"[Combo] Continuing combo - Hit {currentComboIndex + 1}/{maxCombo}");
         PerformComboHit();
     }
@@ -204,6 +244,50 @@ public class PlayerCombat : MonoBehaviourPun
         
         Debug.Log($"[Combo] Performing hit {hitNumber}/{maxCombo} - ComboIndex: {currentComboIndex}, Armed: {isArmed}");
         
+        // Rotate player to face camera direction (fast and snappy)
+        Quaternion targetRotation = transform.rotation; // Default to current rotation
+        if (cameraPivot != null)
+        {
+            Vector3 cameraForward = cameraPivot.forward;
+            cameraForward.y = 0f;
+            if (cameraForward.sqrMagnitude > 0.0001f)
+            {
+                cameraForward.Normalize();
+                targetRotation = Quaternion.LookRotation(cameraForward, Vector3.up);
+                
+                // Fast and snappy rotation towards camera
+                float rotationTime = 0f;
+                float maxRotationTime = 0.15f; // Max time to complete rotation (very snappy)
+                Quaternion startRotation = transform.rotation;
+                
+                while (rotationTime < maxRotationTime)
+                {
+                    rotationTime += Time.deltaTime;
+                    float t = rotationTime / maxRotationTime;
+                    // Use smoothstep for smooth but snappy rotation
+                    t = t * t * (3f - 2f * t);
+                    
+                    transform.rotation = Quaternion.Slerp(startRotation, targetRotation, t);
+                    
+                    // Check if we're close enough to target (early exit for snappiness)
+                    float angle = Quaternion.Angle(transform.rotation, targetRotation);
+                    if (angle < 2f) break; // Close enough, snap to target
+                    
+                    yield return null;
+                }
+                
+                // Ensure we're exactly facing the target
+                transform.rotation = targetRotation;
+            }
+        }
+        
+        // Store attack start position and forward direction for damage detection
+        attackStartPosition = transform.position;
+        attackStartForward = transform.forward;
+        
+        // Store locked rotation to maintain camera-facing direction during entire attack
+        Quaternion lockedRotation = transform.rotation;
+        
         // Set animator parameters for combo system
         if (animator != null)
         {
@@ -220,16 +304,24 @@ public class PlayerCombat : MonoBehaviourPun
                 animator.SetTrigger("Attack");
         }
         
-        // Get attack duration for this combo hit
-        float attackDuration = (currentComboIndex < attackDurations.Length) 
-            ? attackDurations[currentComboIndex] 
-            : attackDurations[0];
+        // Get attack duration for this combo hit (use armed or unarmed durations)
+        float[] durations = isArmed ? armedAttackDurations : unarmedAttackDurations;
+        float attackDuration = (currentComboIndex < durations.Length) 
+            ? durations[currentComboIndex] 
+            : (durations.Length > 0 ? durations[0] : 0.4f);
             
         isAttackingTimer = attackDuration;
         nextAttackTime = Time.time + attackDuration;
         
-        // Wait for attack animation to complete (blocks next attack until this finishes)
-        yield return new WaitForSeconds(attackDuration);
+        // Lock rotation during entire attack to prevent weird turning
+        float elapsed = 0f;
+        while (elapsed < attackDuration)
+        {
+            elapsed += Time.deltaTime;
+            // Keep rotation locked to camera-facing direction throughout attack
+            transform.rotation = lockedRotation;
+            yield return null;
+        }
         
         // Apply damage after attack duration
         ApplyComboDamage();
@@ -278,7 +370,10 @@ public class PlayerCombat : MonoBehaviourPun
     
     private void ApplyComboDamage()
     {
-        Collider[] hitEnemies = Physics.OverlapSphere(transform.position + transform.forward * attackRange * 0.5f, attackRange * 0.5f, enemyLayers);
+        // Use stored attack start position and direction to keep damage area fixed in front
+        // This prevents the attack area from moving with root motion animations
+        Vector3 damageCenter = attackStartPosition + attackStartForward * attackRange * 0.5f;
+        Collider[] hitEnemies = Physics.OverlapSphere(damageCenter, attackRange * 0.5f, enemyLayers);
         
         // Deduplicate targets
         var uniqueEnemies = new System.Collections.Generic.HashSet<GameObject>();
@@ -304,11 +399,134 @@ public class PlayerCombat : MonoBehaviourPun
 
         Debug.Log($"[Combo] Hit {currentComboIndex + 1} - Base Damage: {baseDamage}, Multiplier: {multiplier}x, Final Damage: {finalDamage}, Targets: {uniqueEnemies.Count}");
 
+        bool hitEnemy = false;
         foreach (var go in uniqueEnemies)
         {
             EnemyDamageRelay.Apply(go, finalDamage, gameObject);
             LastHitEnemyRoot = go.transform;
+            hitEnemy = true;
         }
+        
+        // Trigger hit-stop effect if we hit an enemy
+        if (hitEnemy && hitStopDuration > 0f && photonView != null && photonView.IsMine)
+        {
+            if (hitStopCoroutine != null)
+                StopCoroutine(hitStopCoroutine);
+            hitStopCoroutine = StartCoroutine(CoHitStop(uniqueEnemies));
+        }
+    }
+    
+    private IEnumerator CoHitStop(System.Collections.Generic.HashSet<GameObject> hitEnemies)
+    {
+        if (hitEnemies == null || hitEnemies.Count == 0) yield break;
+        
+        // Store original states
+        float playerAnimatorSpeed = 1f;
+        if (animator != null)
+        {
+            playerAnimatorSpeed = animator.speed;
+            animator.speed = 0f; // Pause player animation
+        }
+        
+        bool wasPlayerMovable = true;
+        if (playerController != null)
+        {
+            wasPlayerMovable = true; // We'll check this via SetCanMove
+            playerController.SetCanMove(false); // Stop player movement
+        }
+        
+        // Pause enemy animations and movement
+        System.Collections.Generic.List<BaseEnemyAI> pausedEnemies = new System.Collections.Generic.List<BaseEnemyAI>();
+        System.Collections.Generic.List<Animator> enemyAnimators = new System.Collections.Generic.List<Animator>();
+        System.Collections.Generic.List<CharacterController> enemyControllers = new System.Collections.Generic.List<CharacterController>();
+        
+        foreach (var enemyGo in hitEnemies)
+        {
+            if (enemyGo == null) continue;
+            
+            // Get enemy AI component
+            var enemyAI = enemyGo.GetComponent<BaseEnemyAI>();
+            if (enemyAI != null)
+            {
+                pausedEnemies.Add(enemyAI);
+                
+                // Pause enemy animator
+                if (enemyAI.animator != null)
+                {
+                    enemyAnimators.Add(enemyAI.animator);
+                    enemyAI.animator.speed = 0f;
+                }
+            }
+            else
+            {
+                // Fallback: try to find animator directly
+                var anim = enemyGo.GetComponentInChildren<Animator>();
+                if (anim != null)
+                {
+                    enemyAnimators.Add(anim);
+                    anim.speed = 0f;
+                }
+            }
+            
+            // Stop enemy movement
+            var enemyController = enemyGo.GetComponent<CharacterController>();
+            if (enemyController != null && enemyController.enabled)
+            {
+                enemyControllers.Add(enemyController);
+                enemyController.SimpleMove(Vector3.zero);
+            }
+            else
+            {
+                // Try to find in children
+                var childController = enemyGo.GetComponentInChildren<CharacterController>();
+                if (childController != null && childController.enabled)
+                {
+                    enemyControllers.Add(childController);
+                    childController.SimpleMove(Vector3.zero);
+                }
+            }
+        }
+        
+        // Wait for hit-stop duration while keeping enemies stopped
+        float elapsed = 0f;
+        while (elapsed < hitStopDuration)
+        {
+            // Continuously stop enemy movement during hit-stop
+            foreach (var enemyController in enemyControllers)
+            {
+                if (enemyController != null && enemyController.enabled)
+                {
+                    enemyController.SimpleMove(Vector3.zero);
+                }
+            }
+            
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+        
+        // Restore player state
+        if (animator != null)
+        {
+            animator.speed = playerAnimatorSpeed;
+        }
+        
+        if (playerController != null && wasPlayerMovable)
+        {
+            playerController.SetCanMove(true);
+        }
+        
+        // Restore enemy animations
+        foreach (var enemyAnim in enemyAnimators)
+        {
+            if (enemyAnim != null)
+            {
+                enemyAnim.speed = 1f;
+            }
+        }
+        
+        // Enemy movement will resume naturally through their AI update
+        
+        hitStopCoroutine = null;
     }
     
     private void ResetCombo()

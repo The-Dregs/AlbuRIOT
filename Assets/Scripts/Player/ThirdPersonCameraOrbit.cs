@@ -33,6 +33,8 @@ public class ThirdPersonCameraOrbit : MonoBehaviour
 	private bool isFreeLook = false;
 	public bool cameraControlActive = true; // set by controller
 	private bool rotationLocked = false; // when true, camera follows position but ignores mouse rotation
+	private Vector3 smoothPositionVelocity; // For camera rig position smoothing
+	private Vector3 smoothCameraPositionVelocity; // For camera position smoothing
 
 	public void SetCameraControlActive(bool value)
 	{
@@ -86,11 +88,14 @@ public class ThirdPersonCameraOrbit : MonoBehaviour
 			}
 		}
 
+		// Smooth camera rig position to prevent jitter during fast movement
+		Vector3 targetRigPosition = target.position + Vector3.up * followHeight;
+		transform.position = Vector3.SmoothDamp(transform.position, targetRigPosition, ref smoothPositionVelocity, 1f / followSmooth, Mathf.Infinity, Time.deltaTime);
+		
 		// Set camera rig rotation
-		transform.position = target.position + Vector3.up * followHeight;
 		transform.rotation = Quaternion.Euler(pitch, yaw, 0f);
 
-		// Set camera position with collision
+		// Calculate desired camera position with collision
 		Vector3 camOffset = transform.rotation * new Vector3(0, 0, -followDistance);
 		Vector3 desiredCamPos = transform.position + camOffset;
 		Vector3 pivotPos = transform.position;
@@ -102,7 +107,10 @@ public class ThirdPersonCameraOrbit : MonoBehaviour
 			distance = hit.distance - collisionBuffer;
 			if (distance < 0.1f) distance = 0.1f;
 		}
-		cameraTransform.position = pivotPos + dir * distance;
+		
+		// Smooth camera position movement to prevent spazzing
+		Vector3 targetCamPos = pivotPos + dir * distance;
+		cameraTransform.position = Vector3.SmoothDamp(cameraTransform.position, targetCamPos, ref smoothCameraPositionVelocity, 1f / returnSmooth, Mathf.Infinity, Time.deltaTime);
 		cameraTransform.LookAt(transform.position + Vector3.up * 0.5f);
 	}
 

@@ -115,7 +115,7 @@ public class Inventory : MonoBehaviourPun, IPunObservable
         }
     }
 
-    public bool AddItem(ItemData item, int quantity = 1)
+    public bool AddItem(ItemData item, int quantity = 1, bool silent = false)
     {
         if (photonView != null && !photonView.IsMine && syncWithNetwork) return false;
         if (item == null || quantity <= 0) return false;
@@ -145,10 +145,10 @@ public class Inventory : MonoBehaviourPun, IPunObservable
                     return false; // No slot for one of the items
             }
             OnInventoryChanged?.Invoke();
-            OnItemAdded?.Invoke(item, quantity);
+            if (!silent) OnItemAdded?.Invoke(item, quantity);
             if (photonView != null && photonView.IsMine && syncWithNetwork)
             {
-                photonView.RPC("RPC_AddItem", RpcTarget.Others, item.itemName, quantity);
+                photonView.RPC("RPC_AddItem", RpcTarget.Others, item.itemName, quantity, silent);
             }
             return true;
         }
@@ -187,28 +187,28 @@ public class Inventory : MonoBehaviourPun, IPunObservable
         if (success)
         {
             OnInventoryChanged?.Invoke();
-            OnItemAdded?.Invoke(item, quantity);
+            if (!silent) OnItemAdded?.Invoke(item, quantity);
             if (photonView != null && photonView.IsMine && syncWithNetwork)
             {
-                photonView.RPC("RPC_AddItem", RpcTarget.Others, item.itemName, quantity);
+                photonView.RPC("RPC_AddItem", RpcTarget.Others, item.itemName, quantity, silent);
             }
         }
         return success;
     }
     
     [PunRPC]
-    public void RPC_AddItem(string itemName, int quantity)
+    public void RPC_AddItem(string itemName, int quantity, bool silent = false)
     {
         if (photonView != null && !photonView.IsMine) return;
         
         ItemData item = GetItemDataByName(itemName);
         if (item != null)
         {
-            AddItemLocal(item, quantity);
+            AddItemLocal(item, quantity, silent);
         }
     }
     
-    private void AddItemLocal(ItemData item, int quantity)
+    private void AddItemLocal(ItemData item, int quantity, bool silent = false)
     {
         if (item == null || quantity <= 0) return;
         EnsureSize();
@@ -246,7 +246,7 @@ public class Inventory : MonoBehaviourPun, IPunObservable
         if (remainingQuantity == 0)
         {
             OnInventoryChanged?.Invoke();
-            OnItemAdded?.Invoke(item, quantity);
+            if (!silent) OnItemAdded?.Invoke(item, quantity);
         }
     }
 

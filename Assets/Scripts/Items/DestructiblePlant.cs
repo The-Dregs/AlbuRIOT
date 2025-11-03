@@ -5,7 +5,8 @@ using System.Collections;
 public class DestructiblePlant : MonoBehaviourPun, IEnemyDamageable
 {
     [Header("Health")]
-    [SerializeField] private int maxHits = 2;
+    [Tooltip("Base max hits (used when unarmed). Armed players take fewer hits (2).")]
+    [SerializeField] private int maxHits = 3;
     [SerializeField] private int currentHits = 0;
     
     [Header("Hitbox")]
@@ -261,9 +262,24 @@ public class DestructiblePlant : MonoBehaviourPun, IEnemyDamageable
         ApplyHit(source);
     }
     
+    private int GetEffectiveMaxHits(GameObject source)
+    {
+        if (source == null) return maxHits;
+        
+        var equipmentManager = source.GetComponent<EquipmentManager>();
+        if (equipmentManager != null && equipmentManager.equippedItem != null)
+        {
+            return 2; // Armed: 2 hits
+        }
+        return maxHits; // Unarmed: uses base maxHits (3)
+    }
+    
     private void ApplyHit(GameObject source)
     {
         if (isDestroyed) return;
+        
+        // Determine effective max hits based on whether player is armed
+        int effectiveMaxHits = GetEffectiveMaxHits(source);
         
         currentHits++;
         lastHitSource = source;
@@ -284,7 +300,7 @@ public class DestructiblePlant : MonoBehaviourPun, IEnemyDamageable
         
         StartHitPopEffect();
         
-        if (currentHits >= maxHits)
+        if (currentHits >= effectiveMaxHits)
         {
             DestroyPlant();
         }
@@ -355,10 +371,15 @@ public class DestructiblePlant : MonoBehaviourPun, IEnemyDamageable
     {
         currentHits = hits;
         
+        GameObject source = null;
         if (sourceViewId >= 0)
         {
             var srcPv = PhotonView.Find(sourceViewId);
-            if (srcPv != null) lastHitSource = srcPv.gameObject;
+            if (srcPv != null)
+            {
+                source = srcPv.gameObject;
+                lastHitSource = source;
+            }
         }
         
         if (animator != null && !string.IsNullOrEmpty(hitTrigger))
@@ -366,7 +387,9 @@ public class DestructiblePlant : MonoBehaviourPun, IEnemyDamageable
             animator.SetTrigger(hitTrigger);
         }
         
-        if (hits >= maxHits && !isDestroyed)
+        // Check effective max hits based on the source player's equipment status
+        int effectiveMaxHits = GetEffectiveMaxHits(source);
+        if (hits >= effectiveMaxHits && !isDestroyed)
         {
             DestroyPlant();
         }

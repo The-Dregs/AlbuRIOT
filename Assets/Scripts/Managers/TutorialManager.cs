@@ -184,8 +184,9 @@ public class TutorialManager : MonoBehaviourPunCallbacks
     private void Update()
     {
         // Check for continue input for each active player (only local player can continue)
-        var keysToRemove = new List<int>();
+        var keysToClose = new List<int>();
         
+        // First pass: collect keys to close without modifying the dictionary
         foreach (var kvp in waitingForContinue)
         {
             int playerID = kvp.Key;
@@ -207,15 +208,15 @@ public class TutorialManager : MonoBehaviourPunCallbacks
 
                 if (panel != null && panel.activeSelf && Input.GetMouseButtonDown(0))
                 {
-                    CloseDialogueForPlayer(playerID);
-                    keysToRemove.Add(playerID);
+                    keysToClose.Add(playerID);
                 }
             }
         }
 
-        foreach (var key in keysToRemove)
+        // Second pass: close dialogues for collected keys (modifies dictionary)
+        foreach (var key in keysToClose)
         {
-            waitingForContinue.Remove(key);
+            CloseDialogueForPlayer(key);
         }
     }
 

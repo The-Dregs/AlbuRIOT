@@ -13,10 +13,10 @@ MonoBehaviour:
   m_Name: Flame Feather
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemName: Flame Feather
-  description: A feather that radiates intense heat. Used in crafting powerful items.
-  icon: {fileID: 0}
-  itemType: 6
-  maxStack: 20
+  description: A feather that radiates intense heat.
+  icon: {fileID: 21300000, guid: e01fd8d0af68f704f86010802e7153b6, type: 3}
+  itemType: 7
+  maxStack: 1
   healthModifier: 0
   staminaModifier: 0
   damageModifier: 0
@@ -31,7 +31,7 @@ MonoBehaviour:
   offeringValue: 1
   grantsPower: 0
   associatedEnemy: 
-  uniqueInstance: 0
+  uniqueInstance: 1
   pickupSound: {fileID: 0}
   useSound: {fileID: 0}
   pickupEffect: {fileID: 0}
@@ -41,4 +41,3 @@ MonoBehaviour:
   modelLocalPosition: {x: 0, y: 0, z: 0}
   modelLocalEulerAngles: {x: 0, y: 0, z: 0}
   modelScale: {x: 1, y: 1, z: 1}
-

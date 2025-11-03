@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemName: Moonlit Crystal
   description: A crystal believed to summon Bakunawa.
-  icon: {fileID: 0}
+  icon: {fileID: 21300000, guid: 575baa3a8ca6830469ed7089c9c05191, type: 3}
   itemType: 7
   maxStack: 1
   healthModifier: 0

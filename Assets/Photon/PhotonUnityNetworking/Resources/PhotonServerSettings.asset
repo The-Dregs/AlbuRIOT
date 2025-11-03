@@ -99,6 +99,8 @@ MonoBehaviour:
   - RPC_GenerateAll
   - RPC_ApplyHit
   - RPC_SyncHitState
+  - RPC_HitPopEffect
+  - RPC_StartSinkAnimation
   DisableAutoOpenWizard: 1
   ShowSettings: 1
   DevRegionSetOnce: 1

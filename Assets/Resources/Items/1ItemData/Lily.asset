@@ -14,8 +14,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemName: Lunar Lily
   description: Flowers believed to have cleansing properties.
-  icon: {fileID: 0}
-  itemType: 0
+  icon: {fileID: 21300000, guid: f6d4e6c296033f04c85ff44a538765e9, type: 3}
+  itemType: 8
   maxStack: 10
   healthModifier: 0
   staminaModifier: 0

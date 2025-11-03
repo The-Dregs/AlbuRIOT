@@ -5,12 +5,27 @@ using System.Collections;
 public class DestructiblePlant : MonoBehaviourPun, IEnemyDamageable
 {
     [Header("Health")]
-    [SerializeField] private int maxHits = 3;
+    [SerializeField] private int maxHits = 2;
     [SerializeField] private int currentHits = 0;
+    
+    [Header("Hitbox")]
+    [Tooltip("Collider GameObject for the hitbox. If null, will use collider on this object. This must be on the same GameObject or a child for damage detection to work.")]
+    [SerializeField] private GameObject hitboxObject;
+    [Tooltip("Plant visual model. If null, will use this object's transform. This is what pops when hit.")]
+    [SerializeField] private Transform plantModel;
+    [Tooltip("Offset for the hitbox position (relative to this GameObject's position)")]
+    [SerializeField] private Vector3 hitboxOffset = new Vector3(0, -0.13f, 0);
+    [Tooltip("Scale multiplier for the hitbox size (affects collider radius/size)")]
+    [SerializeField] private Vector3 hitboxScale = Vector3.one;
+    
+    [Header("Hit Effect")]
+    [SerializeField] private float hitPopScale = 1.4f;
+    [SerializeField] private float hitPopDuration = 0.2f;
     
     [Header("Item Drops")]
     [SerializeField] private ItemData[] dropItems;
-    [SerializeField] private int[] dropQuantities;
+    [Tooltip("Min/Max quantity range for each drop item. X = minimum, Y = maximum. Random value between min and max (inclusive) will be dropped.")]
+    [SerializeField] private Vector2Int[] dropQuantityRanges;
     
     [Header("VFX/SFX")]
     [SerializeField] private GameObject hitEffect;
@@ -23,9 +38,26 @@ public class DestructiblePlant : MonoBehaviourPun, IEnemyDamageable
     [SerializeField] private string hitTrigger = "Hit";
     [SerializeField] private string destroyTrigger = "Destroy";
     
+    [Header("Destroy Effect")]
+    [Tooltip("Time it takes for the model to sink through the ground when destroyed")]
+    [SerializeField] private float sinkDuration = 0.2f;
+    [Tooltip("How far below ground the model sinks before being destroyed")]
+    [SerializeField] private float sinkDistance = 1.5f;
+    
     private AudioSource audioSource;
     private bool isDestroyed = false;
-    private GameObject lastHitSource = null; // Track who dealt the final blow
+    private GameObject lastHitSource = null;
+    private Vector3 originalModelScale;
+    private Coroutine hitPopCoroutine;
+    private Coroutine sinkCoroutine;
+    
+    private Collider hitboxCollider;
+    private Vector3 originalColliderCenter;
+    private float originalSphereRadius = -1f;
+    private Vector3 originalBoxSize = Vector3.zero;
+    private float originalCapsuleRadius = -1f;
+    private float originalCapsuleHeight = -1f;
+    private bool originalValuesStored = false;
     
     void Start()
     {
@@ -36,18 +68,153 @@ public class DestructiblePlant : MonoBehaviourPun, IEnemyDamageable
             
         if (animator == null)
             animator = GetComponent<Animator>();
+        
+        if (plantModel == null)
+            plantModel = transform;
+        
+        originalModelScale = plantModel.localScale;
+        
+        SetupHitbox();
+        ApplyHitboxTransform();
             
         if (dropItems == null || dropItems.Length == 0)
         {
             Debug.LogWarning($"[DestructiblePlant] {gameObject.name} has no drop items configured!");
         }
         
-        if (dropQuantities == null || dropQuantities.Length != dropItems.Length)
+        if (dropQuantityRanges == null || dropQuantityRanges.Length != dropItems.Length)
         {
-            dropQuantities = new int[dropItems != null ? dropItems.Length : 0];
-            for (int i = 0; i < dropQuantities.Length; i++)
+            dropQuantityRanges = new Vector2Int[dropItems != null ? dropItems.Length : 0];
+            for (int i = 0; i < dropQuantityRanges.Length; i++)
             {
-                dropQuantities[i] = 1;
+                dropQuantityRanges[i] = new Vector2Int(1, 1);
+            }
+        }
+    }
+    
+    private void SetupHitbox()
+    {
+        hitboxCollider = null;
+        
+        if (hitboxObject != null)
+        {
+            hitboxCollider = hitboxObject.GetComponent<Collider>();
+            if (hitboxCollider == null)
+            {
+                hitboxCollider = hitboxObject.GetComponentInChildren<Collider>();
+            }
+        }
+        
+        if (hitboxCollider == null)
+        {
+            hitboxCollider = GetComponent<Collider>();
+            if (hitboxCollider == null)
+            {
+                hitboxCollider = GetComponentInChildren<Collider>();
+            }
+        }
+        
+        if (hitboxCollider == null)
+        {
+            Debug.LogError($"[DestructiblePlant] {gameObject.name} has no collider found! Damage detection will not work. Make sure the plant has a collider (CapsuleCollider, SphereCollider, or BoxCollider) on this GameObject or a child.");
+            return;
+        }
+        
+        int enemyLayer = LayerMask.NameToLayer("Enemy");
+        if (enemyLayer >= 0 && gameObject.layer != enemyLayer)
+        {
+            Debug.LogWarning($"[DestructiblePlant] {gameObject.name} is not on the 'Enemy' layer (current: {LayerMask.LayerToName(gameObject.layer)}). Player attacks may not detect this plant. Consider changing the layer to 'Enemy'.");
+        }
+        
+        if (!originalValuesStored)
+        {
+            StoreOriginalColliderValues();
+        }
+        
+        ApplyHitboxTransform();
+    }
+    
+    private void StoreOriginalColliderValues()
+    {
+        if (hitboxCollider == null || originalValuesStored) return;
+        
+        if (hitboxCollider is SphereCollider sc)
+        {
+            originalColliderCenter = sc.center;
+            originalSphereRadius = sc.radius;
+            originalValuesStored = true;
+        }
+        else if (hitboxCollider is BoxCollider bc)
+        {
+            originalColliderCenter = bc.center;
+            originalBoxSize = bc.size;
+            originalValuesStored = true;
+        }
+        else if (hitboxCollider is CapsuleCollider cc)
+        {
+            originalColliderCenter = cc.center;
+            originalCapsuleRadius = cc.radius;
+            originalCapsuleHeight = cc.height;
+            originalValuesStored = true;
+        }
+    }
+    
+    private void ApplyHitboxTransform()
+    {
+        if (hitboxCollider == null) return;
+        
+        if (hitboxObject != null)
+        {
+            hitboxObject.transform.localPosition = hitboxOffset;
+        }
+        
+        if (hitboxCollider is SphereCollider sc)
+        {
+            if (originalSphereRadius >= 0f)
+            {
+                sc.center = originalColliderCenter + hitboxOffset;
+                sc.radius = originalSphereRadius * hitboxScale.x;
+            }
+        }
+        else if (hitboxCollider is BoxCollider bc)
+        {
+            if (originalBoxSize.sqrMagnitude > 0f)
+            {
+                bc.center = originalColliderCenter + hitboxOffset;
+                bc.size = new Vector3(
+                    originalBoxSize.x * hitboxScale.x,
+                    originalBoxSize.y * hitboxScale.y,
+                    originalBoxSize.z * hitboxScale.z
+                );
+            }
+        }
+        else if (hitboxCollider is CapsuleCollider cc)
+        {
+            if (originalCapsuleRadius >= 0f && originalCapsuleHeight >= 0f)
+            {
+                cc.center = originalColliderCenter + hitboxOffset;
+                float avgScale = (hitboxScale.x + hitboxScale.y + hitboxScale.z) / 3f;
+                cc.radius = originalCapsuleRadius * avgScale;
+                cc.height = originalCapsuleHeight * hitboxScale.y;
+            }
+        }
+    }
+    
+    void OnValidate()
+    {
+        if (Application.isPlaying)
+        {
+            if (hitboxCollider == null)
+            {
+                SetupHitbox();
+            }
+            else
+            {
+                if (!originalValuesStored)
+                {
+                    StoreOriginalColliderValues();
+                }
+                ApplyHitboxTransform();
             }
         }
     }
@@ -99,7 +266,7 @@ public class DestructiblePlant : MonoBehaviourPun, IEnemyDamageable
         if (isDestroyed) return;
         
         currentHits++;
-        lastHitSource = source; // Update last hitter
+        lastHitSource = source;
         
         if (audioSource != null && hitSound != null)
             audioSource.PlayOneShot(hitSound);
@@ -114,6 +281,8 @@ public class DestructiblePlant : MonoBehaviourPun, IEnemyDamageable
         {
             animator.SetTrigger(hitTrigger);
         }
+        
+        StartHitPopEffect();
         
         if (currentHits >= maxHits)
         {
@@ -130,6 +299,55 @@ public class DestructiblePlant : MonoBehaviourPun, IEnemyDamageable
             }
             photonView.RPC("RPC_SyncHitState", RpcTarget.Others, currentHits, sourceViewId);
         }
+    }
+    
+    private void StartHitPopEffect()
+    {
+        if (hitPopCoroutine != null)
+            StopCoroutine(hitPopCoroutine);
+        hitPopCoroutine = StartCoroutine(CoHitPopEffect());
+        
+        if (photonView != null && PhotonNetwork.IsConnected && PhotonNetwork.InRoom)
+        {
+            photonView.RPC("RPC_HitPopEffect", RpcTarget.Others);
+        }
+    }
+    
+    [PunRPC]
+    private void RPC_HitPopEffect()
+    {
+        if (hitPopCoroutine != null)
+            StopCoroutine(hitPopCoroutine);
+        hitPopCoroutine = StartCoroutine(CoHitPopEffect());
+    }
+    
+    private IEnumerator CoHitPopEffect()
+    {
+        float elapsed = 0f;
+        float halfDuration = hitPopDuration * 0.5f;
+        
+        while (elapsed < hitPopDuration)
+        {
+            elapsed += Time.deltaTime;
+            
+            if (elapsed < halfDuration)
+            {
+                float t = elapsed / halfDuration;
+                float scale = Mathf.Lerp(1f, hitPopScale, t);
+                plantModel.localScale = originalModelScale * scale;
+            }
+            else
+            {
+                float t = (elapsed - halfDuration) / halfDuration;
+                float scale = Mathf.Lerp(hitPopScale, 1f, t);
+                plantModel.localScale = originalModelScale * scale;
+            }
+            
+            yield return null;
+        }
+        
+        plantModel.localScale = originalModelScale;
+        hitPopCoroutine = null;
     }
     
     [PunRPC]
@@ -173,9 +391,72 @@ public class DestructiblePlant : MonoBehaviourPun, IEnemyDamageable
             animator.SetTrigger(destroyTrigger);
         }
         
-        DropItems();
+        bool isMasterClient = photonView != null && PhotonNetwork.IsConnected && PhotonNetwork.InRoom && PhotonNetwork.IsMasterClient;
+        bool isOffline = photonView == null || !PhotonNetwork.IsConnected || !PhotonNetwork.InRoom;
         
-        StartCoroutine(DestroyAfterDelay(0.5f));
+        if (isMasterClient || isOffline)
+        {
+            DropItems();
+        }
+        
+        StartCoroutine(SinkAndDestroy());
+        
+        if (photonView != null && PhotonNetwork.IsConnected && PhotonNetwork.InRoom)
+        {
+            photonView.RPC("RPC_StartSinkAnimation", RpcTarget.Others);
+        }
+    }
+    
+    [PunRPC]
+    private void RPC_StartSinkAnimation()
+    {
+        if (isDestroyed) return;
+        isDestroyed = true;
+        
+        if (audioSource != null && destroySound != null)
+            audioSource.PlayOneShot(destroySound);
+            
+        if (destroyEffect != null)
+        {
+            GameObject fx = Instantiate(destroyEffect, transform.position, Quaternion.identity);
+            Destroy(fx, 2f);
+        }
+        
+        if (animator != null && !string.IsNullOrEmpty(destroyTrigger))
+        {
+            animator.SetTrigger(destroyTrigger);
+        }
+        
+        StartCoroutine(SinkAndDestroy());
+    }
+    
+    private IEnumerator SinkAndDestroy()
+    {
+        if (hitboxCollider != null)
+            hitboxCollider.enabled = false;
+        
+        Vector3 startPos = plantModel.position;
+        Vector3 endPos = startPos - Vector3.up * sinkDistance;
+        float elapsed = 0f;
+        
+        while (elapsed < sinkDuration)
+        {
+            elapsed += Time.deltaTime;
+            float t = elapsed / sinkDuration;
+            plantModel.position = Vector3.Lerp(startPos, endPos, t);
+            yield return null;
+        }
+        
+        plantModel.position = endPos;
+        
+        if (photonView != null && PhotonNetwork.IsConnected && PhotonNetwork.InRoom)
+        {
+            PhotonNetwork.Destroy(gameObject);
+        }
+        else
+        {
+            Destroy(gameObject);
+        }
     }
     
     private void DropItems()
@@ -212,7 +493,8 @@ public class DestructiblePlant : MonoBehaviourPun, IEnemyDamageable
         {
             if (dropItems[i] != null)
             {
-                int quantity = (i < dropQuantities.Length) ? dropQuantities[i] : 1;
+                Vector2Int range = (i < dropQuantityRanges.Length) ? dropQuantityRanges[i] : new Vector2Int(1, 1);
+                int quantity = Random.Range(range.x, range.y + 1);
                 bool added = inventory.AddItem(dropItems[i], quantity);
                 
                 if (!added)
@@ -263,7 +545,8 @@ public class DestructiblePlant : MonoBehaviourPun, IEnemyDamageable
         {
             if (dropItems[i] != null)
             {
-                int quantity = (i < dropQuantities.Length) ? dropQuantities[i] : 1;
+                Vector2Int range = (i < dropQuantityRanges.Length) ? dropQuantityRanges[i] : new Vector2Int(1, 1);
+                int quantity = Random.Range(range.x, range.y + 1);
                 ItemManager.Instance.SpawnItem(dropItems[i], dropPosition, quantity);
                 
                 Vector3 offset = Random.insideUnitCircle * 0.5f;
@@ -274,24 +557,55 @@ public class DestructiblePlant : MonoBehaviourPun, IEnemyDamageable
         }
     }
     
-    private IEnumerator DestroyAfterDelay(float delay)
-    {
-        yield return new WaitForSeconds(delay);
-        
-        if (photonView != null && PhotonNetwork.IsConnected && PhotonNetwork.InRoom)
-        {
-            PhotonNetwork.Destroy(gameObject);
-        }
-        else
-        {
-            Destroy(gameObject);
-        }
-    }
     
     void OnDrawGizmosSelected()
     {
         Gizmos.color = Color.yellow;
-        Gizmos.DrawWireSphere(transform.position, 1f);
+        
+        Collider col = hitboxCollider;
+        if (col == null && hitboxObject != null)
+            col = hitboxObject.GetComponent<Collider>();
+        if (col == null)
+            col = GetComponent<Collider>();
+        
+        if (col != null)
+        {
+            Vector3 worldPos = hitboxObject != null ? hitboxObject.transform.position : transform.position;
+            worldPos += hitboxOffset;
+            
+            if (col is SphereCollider sc)
+            {
+                float radius = originalSphereRadius > 0 ? originalSphereRadius * hitboxScale.x : sc.radius;
+                Gizmos.DrawWireSphere(worldPos, radius);
+            }
+            else if (col is BoxCollider bc)
+            {
+                Vector3 size = originalBoxSize.sqrMagnitude > 0 
+                    ? new Vector3(originalBoxSize.x * hitboxScale.x, originalBoxSize.y * hitboxScale.y, originalBoxSize.z * hitboxScale.z)
+                    : bc.size;
+                Gizmos.DrawWireCube(worldPos, size);
+            }
+            else if (col is CapsuleCollider cc)
+            {
+                float avgScale = (hitboxScale.x + hitboxScale.y + hitboxScale.z) / 3f;
+                float radius = originalCapsuleRadius >= 0f ? originalCapsuleRadius * avgScale : cc.radius;
+                float height = originalCapsuleHeight >= 0f ? originalCapsuleHeight * hitboxScale.y : cc.height;
+                
+                Vector3 center = worldPos;
+                Vector3 top = center + Vector3.up * (height * 0.5f - radius);
+                Vector3 bottom = center - Vector3.up * (height * 0.5f - radius);
+                Gizmos.DrawWireSphere(top, radius);
+                Gizmos.DrawWireSphere(bottom, radius);
+                Gizmos.DrawLine(top + Vector3.right * radius, bottom + Vector3.right * radius);
+                Gizmos.DrawLine(top - Vector3.right * radius, bottom - Vector3.right * radius);
+                Gizmos.DrawLine(top + Vector3.forward * radius, bottom + Vector3.forward * radius);
+                Gizmos.DrawLine(top - Vector3.forward * radius, bottom - Vector3.forward * radius);
+            }
+        }
+        else
+        {
+            Gizmos.DrawWireSphere(transform.position + hitboxOffset, 1f);
+        }
     }
 }
 

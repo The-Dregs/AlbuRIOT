@@ -14,8 +14,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemName: Oar
   description: An oar for paddling a boat
-  icon: {fileID: 21300000, guid: daea1c21f96a6624ca584de54bff32b9, type: 3}
-  itemType: 2
+  icon: {fileID: 21300000, guid: 55a1bf28557374249bfc4d2339241a9c, type: 3}
+  itemType: 1
   maxStack: 1
   healthModifier: 0
   staminaModifier: 0

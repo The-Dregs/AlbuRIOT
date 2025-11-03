@@ -1,8 +1,9 @@
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.EventSystems;
 using TMPro;
 
-public class ItemSlotUI : MonoBehaviour
+public class ItemSlotUI : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
 {
     public Image iconImage;
     public TextMeshProUGUI quantityText;
@@ -45,7 +46,10 @@ public class ItemSlotUI : MonoBehaviour
         // Handle button visibility and text based on item type
         if (equipButton != null)
         {
-            bool showButton = slot != null && slot.item != null && slot.item.itemType != ItemType.Unique;
+            bool showButton = slot != null && slot.item != null && 
+                (slot.item.itemType == ItemType.Consumable || 
+                 slot.item.itemType == ItemType.Equipment || 
+                 slot.item.itemType == ItemType.Armor);
             equipButton.interactable = showButton;
             equipButton.gameObject.SetActive(showButton);
             
@@ -90,5 +94,22 @@ public class ItemSlotUI : MonoBehaviour
         {
             inventoryUI.TryEquipFromSlot(slot);
         }
+    }
+    
+    public void OnPointerEnter(PointerEventData eventData)
+    {
+        if (inventoryUI == null) inventoryUI = GetComponentInParent<InventoryUI>(true);
+        if (inventoryUI == null) return;
+        if (slot != null && slot.item != null)
+        {
+            inventoryUI.ShowHoveredItem(slot.item);
+        }
+    }
+    
+    public void OnPointerExit(PointerEventData eventData)
+    {
+        if (inventoryUI == null) inventoryUI = GetComponentInParent<InventoryUI>(true);
+        if (inventoryUI == null) return;
+        inventoryUI.ClearHoveredItem();
     }
 }

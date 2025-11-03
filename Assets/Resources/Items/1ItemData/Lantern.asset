@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemName: Blessed Lantern
   description: A mystical oil lantern, its light blessed with ancient power.
-  icon: {fileID: 0}
+  icon: {fileID: 21300000, guid: fd6564c52a1c78544917dd1745f2459e, type: 3}
   itemType: 7
   maxStack: 1
   healthModifier: 0

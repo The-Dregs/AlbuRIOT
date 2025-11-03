@@ -14,9 +14,9 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemName: Fiber Leaves
   description: Tough fibrous leaves used for crafting various materials.
-  icon: {fileID: 0}
-  itemType: 6
-  maxStack: 50
+  icon: {fileID: 21300000, guid: 2848d4abcd96f4e4a85c37691e4169e0, type: 3}
+  itemType: 8
+  maxStack: 67
   healthModifier: 0
   staminaModifier: 0
   damageModifier: 0
@@ -41,4 +41,3 @@ MonoBehaviour:
   modelLocalPosition: {x: 0, y: 0, z: 0}
   modelLocalEulerAngles: {x: 0, y: 0, z: 0}
   modelScale: {x: 1, y: 1, z: 1}
-

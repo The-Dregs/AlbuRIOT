@@ -20,10 +20,14 @@ public class InventoryUI : MonoBehaviour
     public TMPro.TextMeshProUGUI equippedItemText;
     public Image equippedItemIcon; // optional: shows the equipped item's icon in the large left square
     public UnityEngine.UI.Button unequipButton; // optional: button to unequip current item back to inventory
+    [Header("Equipped Item Details")]
+    public TMPro.TextMeshProUGUI equippedItemName; // optional: displays the equipped item's name
+    public TMPro.TextMeshProUGUI equippedItemDescription; // optional: displays the equipped item's description
     private int _inputLockToken = 0;
     private CanvasGroup _panelCanvasGroup; // used when panel is the same object as this controller
     private string _lastStateSignature = ""; // snapshot of inventory + equipped to detect changes
     private bool _isOpen = false; // runtime state
+    private ItemData _hoveredItem = null; // currently hovered item for description display
 
     // read-only accessors for other UI pieces
     public Inventory PlayerInventory => playerInventory;
@@ -253,8 +257,7 @@ public class InventoryUI : MonoBehaviour
         // equipped text and icon
         if (equipmentManager != null)
         {
-            if (equippedItemText != null)
-                equippedItemText.text = equipmentManager.equippedItem != null ? $"Equipped: {equipmentManager.equippedItem.itemName}" : "Equipped: None";
+            // Icon always shows equipped item (not hovered item)
             if (equippedItemIcon != null)
             {
                 if (equipmentManager.equippedItem != null)
@@ -268,8 +271,41 @@ public class InventoryUI : MonoBehaviour
                     equippedItemIcon.enabled = false; // hide white box
                 }
             }
+            
+            // Text fields show hovered item if hovering, otherwise show equipped item
+            ItemData displayItem = _hoveredItem != null ? _hoveredItem : equipmentManager.equippedItem;
+            
+            if (equippedItemText != null)
+                equippedItemText.text = equipmentManager.equippedItem != null ? $"Equipped: {equipmentManager.equippedItem.itemName}" : "Equipped: None";
+            
+            if (equippedItemName != null)
+            {
+                if (displayItem != null)
+                {
+                    equippedItemName.text = displayItem.itemName;
+                    equippedItemName.gameObject.SetActive(true);
+                }
+                else
+                {
+                    equippedItemName.text = "";
+                    equippedItemName.gameObject.SetActive(false);
+                }
+            }
+            if (equippedItemDescription != null)
+            {
+                if (displayItem != null)
+                {
+                    equippedItemDescription.text = displayItem.description;
+                    equippedItemDescription.gameObject.SetActive(true);
+                }
+                else
+                {
+                    equippedItemDescription.text = "";
+                    equippedItemDescription.gameObject.SetActive(false);
+                }
+            }
             if (unequipButton != null)
-                unequipButton.gameObject.SetActive(equipmentManager.equippedItem != null);
+                unequipButton.gameObject.SetActive(equipmentManager.equippedItem != null && _hoveredItem == null);
         }
 
         // update snapshot after drawing
@@ -353,6 +389,18 @@ public class InventoryUI : MonoBehaviour
         var pv = equipmentManager.GetComponent<Photon.Pun.PhotonView>();
         if (pv != null && !pv.IsMine) return;
         equipmentManager.Unequip();
+        RefreshUI();
+    }
+    
+    public void ShowHoveredItem(ItemData item)
+    {
+        _hoveredItem = item;
+        RefreshUI();
+    }
+    
+    public void ClearHoveredItem()
+    {
+        _hoveredItem = null;
         RefreshUI();
     }
 

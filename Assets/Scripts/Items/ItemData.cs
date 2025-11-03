@@ -66,5 +66,6 @@ public enum ItemType
     Power,
     Misc,
     Armor,
-    Unique
+    Unique,
+    Items
 }

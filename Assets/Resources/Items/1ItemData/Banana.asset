@@ -12,18 +12,18 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 49583e7f51600d243807eff9b726b809, type: 3}
   m_Name: Banana
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
-  itemName: Banana Clump
+  itemName: Banana
   description: A clump of banana.
-  icon: {fileID: 21300000, guid: 719d75d2b3d7f2b4ab081194aad7a3ff, type: 3}
+  icon: {fileID: 21300000, guid: e3ba54f00cef9a445af293e079a07cbc, type: 3}
   itemType: 0
-  maxStack: 2
+  maxStack: 10
   healthModifier: 0
   staminaModifier: 0
-  damageModifier: 5
+  damageModifier: 0
   speedModifier: 0
   staminaCostModifier: 0
-  healAmount: 0
-  staminaRestore: 0
+  healAmount: 10
+  staminaRestore: 10
   effectDuration: 0
   isQuestItem: 0
   questId: 

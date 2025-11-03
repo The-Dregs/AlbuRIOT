@@ -14,12 +14,12 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemName: Bolo Knife
   description: A bolo knife
-  icon: {fileID: 21300000, guid: 8bcf4bafbc9b39449ad9f06752301805, type: 3}
+  icon: {fileID: 21300000, guid: f3bb214d04083764a93af384457d9fef, type: 3}
   itemType: 1
   maxStack: 1
   healthModifier: 0
   staminaModifier: 0
-  damageModifier: 10
+  damageModifier: 20
   speedModifier: 0
   staminaCostModifier: 0
   healAmount: 0

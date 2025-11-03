@@ -1,5 +1,6 @@
 using UnityEngine;
 using Photon.Pun;
+using System.Collections.Generic;
 
 public class PlayerStats : MonoBehaviourPun, IPunObservable
 {
@@ -51,9 +52,19 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
     {
         currentHealth = maxHealth;
         currentStamina = maxStamina;
-    animator = GetComponent<Animator>();
-    controller = GetComponent<ThirdPersonController>();
-    combat = GetComponent<PlayerCombat>();
+        animator = GetComponent<Animator>();
+        controller = GetComponent<ThirdPersonController>();
+        combat = GetComponent<PlayerCombat>();
+        inventory = GetComponent<Inventory>();
+    }
+    
+    void Start()
+    {
+        // Store spawn position after object is positioned
+        if (spawnPosition == Vector3.zero)
+        {
+            spawnPosition = transform.position;
+        }
     }
 
     void Update()
@@ -61,8 +72,35 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
         if (photonView != null && !photonView.IsMine) return;
         TickDebuffs();
         
-        // Update exhausted state based on stamina
-        UpdateExhaustedState();
+        // Handle downed state timer (multiplayer only)
+        if (isDowned && !isDead)
+        {
+            downedTimer -= Time.deltaTime;
+            if (downedTimer <= 0f)
+            {
+                // Time ran out, fully die
+                FullyDie();
+            }
+
+            // Toggle crawling loop based on movement speed while downed
+            if (animator != null && AnimatorHasParameter(crawlingBoolName))
+            {
+                float horizSpeed = 0f;
+                var cc = GetComponent<CharacterController>();
+                if (cc != null)
+                {
+                    var v = cc.velocity; v.y = 0f; horizSpeed = v.magnitude;
+                }
+                bool isCrawling = horizSpeed > 0.05f; // small deadzone
+                animator.SetBool(crawlingBoolName, isCrawling);
+            }
+        }
+        
+        // Update exhausted state based on stamina (only if not dead/downed)
+        if (!isDead && !isDowned)
+        {
+            UpdateExhaustedState();
+        }
         
         // countdown delay timer
         if (staminaRegenDelayTimer > 0f)
@@ -90,7 +128,7 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
         }
 
         // slow, configurable health regeneration (owner only)
-        bool canRegenHealth = enableHealthRegen && !isDead && currentHealth < maxHealth && healthRegenDelayTimer <= 0f && (!blockRegenWhileBleeding || bleedRemaining <= 0f);
+        bool canRegenHealth = enableHealthRegen && !isDead && !isDowned && currentHealth < maxHealth && healthRegenDelayTimer <= 0f && (!blockRegenWhileBleeding || bleedRemaining <= 0f);
         if (canRegenHealth && healthRegenPerSecond > 0f)
         {
             healthRegenAccumulator += Mathf.Max(0f, healthRegenPerSecond) * Time.deltaTime;
@@ -124,7 +162,7 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
 
     public void TakeDamage(int amount)
     {
-        if (isDead) return;
+        if (isDead || isDowned || isDeathSequenceRunning) return;
         // invulnerable while rolling/dashing
         var controllerCmp = controller != null ? controller : GetComponent<ThirdPersonController>();
         if (controllerCmp != null && controllerCmp.IsRolling)
@@ -200,7 +238,7 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
     // Update exhausted state based on stamina
     private void UpdateExhaustedState()
     {
-        if (isDead) return; // Can't be exhausted when dead
+        if (isDead || isDowned) return; // Can't be exhausted when dead or downed
         
         bool shouldBeExhausted = currentStamina <= 0;
         float recoveryThreshold = maxStamina * exhaustedRecoveryThreshold;
@@ -377,20 +415,35 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
     public float StaminaRegenDelayRemaining => Mathf.Max(0f, staminaRegenDelayTimer);
 
     // health regen status
-    public bool IsHealthRegenerating => enableHealthRegen && !isDead && currentHealth < maxHealth && healthRegenDelayTimer <= 0f && (!blockRegenWhileBleeding || bleedRemaining <= 0f);
+    public bool IsHealthRegenerating => enableHealthRegen && !isDead && !isDowned && currentHealth < maxHealth && healthRegenDelayTimer <= 0f && (!blockRegenWhileBleeding || bleedRemaining <= 0f);
     public float HealthRegenDelayRemaining => Mathf.Max(0f, healthRegenDelayTimer);
 
     // --- hit / death animation integration ---
     [Header("hit/death animation")]
     public string hitTriggerName = "Hit";
     public string deathTriggerName = "Die";
+    public string crawlDeathTriggerName = "DieCrawl"; // alternate death when downed/crawling
+    public string respawnTriggerName = "Respawn";     // single-player respawn animation
     public string isDeadBoolName = "IsDead";
+    [Header("downed/crawl animation")]
+    public string downTriggerName = "Down";         // stand -> down transition
+    public string getUpTriggerName = "GetUp";       // revive transition
+    public string crawlingBoolName = "IsCrawling";  // loop while moving when downed
 
     private Animator animator;
     private ThirdPersonController controller;
     private PlayerCombat combat;
+    private Inventory inventory;
     private bool isDead = false;
+    private bool isDowned = false;
+    private bool isDeathSequenceRunning = false; // prevents multiple death triggers while dying
+    private float downedTimer = 0f;
+    private const float DOWNTIME_DURATION = 30f;
+    private Vector3 spawnPosition = Vector3.zero;
+    
     public bool IsDead => isDead;
+    public bool IsDowned => isDowned;
+    public float DownedTimeRemaining => Mathf.Max(0f, downedTimer);
 
     private bool AnimatorHasParameter(string name)
     {
@@ -417,19 +470,334 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
 
     private void Die()
     {
-        if (isDead) return;
-        isDead = true;
-        if (photonView != null && (Photon.Pun.PhotonNetwork.IsConnected || Photon.Pun.PhotonNetwork.OfflineMode))
+        if (isDead || isDowned || isDeathSequenceRunning) return;
+        isDeathSequenceRunning = true;
+        
+        bool isMultiplayer = photonView != null && PhotonNetwork.IsConnected && !PhotonNetwork.OfflineMode;
+        
+        if (isMultiplayer)
         {
-            photonView.RPC(nameof(RPC_PlayDeath), RpcTarget.All);
+            // Multiplayer: Go to downed state
+            SetDowned();
         }
         else
         {
-            // not connected: play locally
-            RPC_PlayDeath();
+            // Singleplayer: play death anim, fade to black, then respawn
+            StartCoroutine(CoSingleplayerDeathSequence());
         }
-        // clear debuffs on death
-        slowPercent = 0f; rootRemaining = 0f; silenceRemaining = 0f; stunRemaining = 0f; defenseDownBonus = 0f; bleedPerTick = 0f; bleedRemaining = 0f; staminaBurnPerTick = 0f; staminaBurnRemaining = 0f;
+    }
+
+    // singleplayer death flow: wait for anim, fade out, respawn, fade in
+    private System.Collections.IEnumerator CoSingleplayerDeathSequence()
+    {
+        // play death locally
+        RPC_PlayDeath();
+        
+        // small wait to allow animation to play
+        float animHold = 1.0f; // tweakable if needed
+        yield return new WaitForSeconds(animHold);
+        
+        // fade to black
+        var fader = ScreenFader.Instance;
+        if (fader == null)
+        {
+            // create one if none exists
+            var go = new GameObject("ScreenFader_Auto");
+            fader = go.AddComponent<ScreenFader>();
+        }
+        // faster fade out, then hold FULL BLACK for exactly 1.0s (not counting fade time)
+        float fullBlackHoldSeconds = 0.4f; // precise full-black duration after fade reaches 100%
+        float fadeOutDuration = 0.2f;      // time to reach full black
+        fader.FadeOut(fadeOutDuration);
+        yield return new WaitForSeconds(fadeOutDuration);
+        yield return new WaitForSeconds(fullBlackHoldSeconds);
+
+        // respawn and reset
+        RespawnAtSpawnPoint();
+
+        // ensure fully alive and controllable after respawn
+        isDead = false;
+        isDowned = false;
+        if (animator != null && AnimatorHasParameter(isDeadBoolName)) animator.SetBool(isDeadBoolName, false);
+        // trigger respawn animation (plays under black, then visible as we fade in)
+        if (animator != null && AnimatorHasParameter(respawnTriggerName)) animator.SetTrigger(respawnTriggerName);
+        // Lock movement for 2 seconds after spawn to let respawn anim settle
+        yield return StartCoroutine(CoSpawnMotionLock(3f));
+        if (combat != null)
+        {
+            combat.SetCanControl(true);
+        }
+        SetStaminaRegenBlocked(false);
+
+        // immediately fade in while respawn anim plays (player remains input-locked)
+        fader.FadeIn(0.8f);
+        isDeathSequenceRunning = false; // allow future deaths
+    }
+
+    private System.Collections.IEnumerator CoSpawnMotionLock(float seconds)
+    {
+        // Disable player inputs/movement/attacks but keep camera control ON
+        ThirdPersonCameraOrbit cam = null;
+        if (controller != null && controller.cameraPivot != null)
+            cam = controller.cameraPivot.GetComponent<ThirdPersonCameraOrbit>();
+
+        if (cam != null) cam.SetCameraControlActive(true);
+        if (controller != null)
+        {
+            controller.SetCanControl(false);
+            controller.SetCanMove(false);
+        }
+        if (combat != null) combat.SetCanControl(false);
+
+        float end = Time.time + Mathf.Max(0f, seconds);
+        while (Time.time < end)
+        {
+            // ensure camera stays active during lock
+            if (cam != null && !cam.cameraControlActive) cam.SetCameraControlActive(true);
+            yield return null;
+        }
+
+        if (controller != null)
+        {
+            controller.SetCanControl(true);
+            controller.SetCanMove(true);
+        }
+        if (combat != null) combat.SetCanControl(true);
+    }
+    
+    private void SetDowned()
+    {
+        isDowned = true;
+        isDeathSequenceRunning = false; // entering downed; allow future flow
+        downedTimer = DOWNTIME_DURATION;
+        currentHealth = 0;
+        
+        // Sync downed state to all clients
+        if (photonView != null)
+        {
+            photonView.RPC(nameof(RPC_SetDowned), RpcTarget.All);
+        }
+        else
+        {
+            // Offline: apply locally
+            RPC_SetDowned();
+        }
+        
+        // Clear debuffs
+        slowPercent = 0f; rootRemaining = 0f; silenceRemaining = 0f; stunRemaining = 0f; defenseDownBonus = 0f; 
+        bleedPerTick = 0f; bleedRemaining = 0f; staminaBurnPerTick = 0f; staminaBurnRemaining = 0f;
+    }
+    
+    private void FullyDie()
+    {
+        if (isDead) return;
+        isDead = true;
+        isDowned = false;
+        
+        // Hide downed overlay when fully dying
+        if (photonView == null || photonView.IsMine)
+        {
+            HideDownedOverlay();
+        }
+        
+        if (photonView != null && (Photon.Pun.PhotonNetwork.IsConnected || Photon.Pun.PhotonNetwork.OfflineMode))
+        {
+            if (isDowned)
+                photonView.RPC(nameof(RPC_PlayCrawlDeath), RpcTarget.All);
+            else
+                photonView.RPC(nameof(RPC_PlayDeath), RpcTarget.All);
+        }
+        else
+        {
+            if (isDowned) RPC_PlayCrawlDeath(); else RPC_PlayDeath();
+        }
+    }
+    
+    private void RespawnAtSpawnPoint()
+    {
+        // Lose some random items (20-30% of inventory)
+        if (inventory != null)
+        {
+            int itemsToLose = Random.Range(2, 4); // Lose 2-3 random items
+            List<int> slotsToClear = new List<int>();
+            
+            // Collect non-empty slots
+            for (int i = 0; i < Inventory.SLOT_COUNT; i++)
+            {
+                var slot = inventory.GetSlot(i);
+                if (slot != null && !slot.IsEmpty)
+                {
+                    slotsToClear.Add(i);
+                }
+            }
+            
+            // Randomly remove items
+            for (int i = 0; i < itemsToLose && slotsToClear.Count > 0; i++)
+            {
+                int randomIndex = Random.Range(0, slotsToClear.Count);
+                int slotIndex = slotsToClear[randomIndex];
+                slotsToClear.RemoveAt(randomIndex);
+                
+                var slot = inventory.GetSlot(slotIndex);
+                if (slot != null)
+                {
+                    // Remove half the quantity (rounded up)
+                    int quantityToRemove = Mathf.Max(1, (slot.quantity + 1) / 2);
+                    inventory.RemoveItem(slot.item, quantityToRemove);
+                }
+            }
+        }
+        
+        // Respawn at spawn point
+        if (photonView != null && photonView.IsMine)
+        {
+            // Teleport player
+            CharacterController cc = GetComponent<CharacterController>();
+            if (cc != null)
+            {
+                cc.enabled = false;
+                transform.position = spawnPosition;
+                cc.enabled = true;
+            }
+            else
+            {
+                transform.position = spawnPosition;
+            }
+            
+            // Reset health and stamina
+            currentHealth = maxHealth;
+            currentStamina = maxStamina;
+            
+            // Clear debuffs
+            slowPercent = 0f; rootRemaining = 0f; silenceRemaining = 0f; stunRemaining = 0f; defenseDownBonus = 0f;
+            bleedPerTick = 0f; bleedRemaining = 0f; staminaBurnPerTick = 0f; staminaBurnRemaining = 0f;
+        }
+    }
+    
+    [PunRPC]
+    private void RPC_SetDowned()
+    {
+        isDowned = true;
+        downedTimer = DOWNTIME_DURATION;
+        
+        // Animation flags for downed state: stand -> down
+        if (animator != null)
+        {
+            if (AnimatorHasParameter(downTriggerName)) animator.SetTrigger(downTriggerName);
+            // ensure crawling is off until there is movement
+            if (AnimatorHasParameter(crawlingBoolName)) animator.SetBool(crawlingBoolName, false);
+        }
+        
+        // Disable control for local player
+        if (photonView == null || photonView.IsMine)
+        {
+            if (controller != null)
+            {
+                controller.SetCanControl(false);
+                controller.SetCanMove(false);
+            }
+            if (combat != null)
+            {
+                combat.SetCanControl(false);
+            }
+            SetStaminaRegenBlocked(true);
+            
+            // Show downed overlay
+            ShowDownedOverlay();
+        }
+    }
+    
+    private void ShowDownedOverlay()
+    {
+        if (photonView != null && !photonView.IsMine) return; // Only show for local player
+        var overlay = FindFirstObjectByType<DownedOverlayUI>();
+        if (overlay != null)
+        {
+            // Overlay will handle showing itself in Update()
+        }
+    }
+    
+    [PunRPC]
+    public void RPC_Revive()
+    {
+        if (!isDowned || isDead) return;
+        
+        isDowned = false;
+        downedTimer = 0f;
+        currentHealth = maxHealth / 2; // Revive with half health
+        currentStamina = maxStamina / 2; // Revive with half stamina
+        
+        // Re-enable control
+        if (photonView == null || photonView.IsMine)
+        {
+            if (controller != null)
+            {
+                controller.SetCanControl(true);
+                controller.SetCanMove(true);
+            }
+            if (combat != null)
+            {
+                combat.SetCanControl(true);
+            }
+            SetStaminaRegenBlocked(false);
+        }
+        
+        // Reset animation flags: play get-up transition
+        if (animator != null)
+        {
+            if (AnimatorHasParameter(getUpTriggerName)) animator.SetTrigger(getUpTriggerName);
+            if (AnimatorHasParameter(isDeadBoolName)) animator.SetBool(isDeadBoolName, false);
+            if (AnimatorHasParameter(crawlingBoolName)) animator.SetBool(crawlingBoolName, false);
+        }
+        
+        // Sync revive to all clients
+        if (photonView != null)
+        {
+            photonView.RPC(nameof(RPC_OnRevived), RpcTarget.All);
+        }
+    }
+    
+    [PunRPC]
+    private void RPC_OnRevived()
+    {
+        isDowned = false;
+        downedTimer = 0f;
+        
+        // Re-enable control for local player
+        if (photonView == null || photonView.IsMine)
+        {
+            if (controller != null)
+            {
+                controller.SetCanControl(true);
+                controller.SetCanMove(true);
+            }
+            if (combat != null)
+            {
+                combat.SetCanControl(true);
+            }
+            SetStaminaRegenBlocked(false);
+            
+            // Hide downed overlay
+            HideDownedOverlay();
+        }
+        
+        // Reset animation flags: play get-up transition
+        if (animator != null)
+        {
+            if (AnimatorHasParameter(getUpTriggerName)) animator.SetTrigger(getUpTriggerName);
+            if (AnimatorHasParameter(isDeadBoolName)) animator.SetBool(isDeadBoolName, false);
+            if (AnimatorHasParameter(crawlingBoolName)) animator.SetBool(crawlingBoolName, false);
+        }
+    }
+    
+    private void HideDownedOverlay()
+    {
+        if (photonView != null && !photonView.IsMine) return; // Only hide for local player
+        var overlay = FindFirstObjectByType<DownedOverlayUI>();
+        if (overlay != null)
+        {
+            // Overlay will handle hiding itself in Update()
+        }
     }
 
     [PunRPC]
@@ -449,6 +817,32 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
         {
             if (AnimatorHasParameter(isDeadBoolName)) animator.SetBool(isDeadBoolName, true);
             if (AnimatorHasParameter(deathTriggerName)) animator.SetTrigger(deathTriggerName);
+        }
+        // disable control for local player so they stop moving/attacking
+        if (photonView == null || photonView.IsMine)
+        {
+            if (controller != null)
+            {
+                controller.SetCanControl(false);
+                controller.SetCanMove(false);
+            }
+            if (combat != null)
+            {
+                combat.SetCanControl(false);
+            }
+            // block stamina regen and spending
+            SetStaminaRegenBlocked(true);
+        }
+    }
+
+    [PunRPC]
+    private void RPC_PlayCrawlDeath()
+    {
+        // animation flags for crawl-specific death
+        if (animator != null)
+        {
+            if (AnimatorHasParameter(isDeadBoolName)) animator.SetBool(isDeadBoolName, true);
+            if (AnimatorHasParameter(crawlDeathTriggerName)) animator.SetTrigger(crawlDeathTriggerName);
         }
         // disable control for local player so they stop moving/attacking
         if (photonView == null || photonView.IsMine)

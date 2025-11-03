@@ -1,88 +1,57 @@
 {
-  "questName": "",
-  "description": "",
+  "questName": "Chapter 2: The Voyage Begins",
+  "description": "Gather herbs for the Nuno, then find and repair a ship to continue your journey.",
   "requiresAllObjectives": true,
   "autoAdvanceObjectives": true,
   "startObjectiveIndex": 0,
   "objectives": [
     {
-      "objectiveName": "Atonement at the mound",
-      "description": "Collect herbs in the wild.",
+      "objectiveName": "Collect Healing Herbs",
+      "description": "Gather herbs in the wild: 3 Aloes, 3 Geranium, 3 Sugar Cane, and 5 Fiber Leaves.",
       "objectiveType": "Collect",
-      "targetId": "Geranium",
-      "requiredCount": 3,
-      "collectItemIds": ["Geranium"],
-      "collectQuantities": [3]
+      "targetId": "Aloe",
+      "requiredCount": 14,
+      "collectItemIds": ["Aloe", "Geranium", "Sugar Cane", "Fiber Leaves"],
+      "collectQuantities": [3, 3, 3, 5]
     },
     {
-      "objectiveName": "Perform the Cleansing Ritual",
-      "description": "Use the herbs at the broken mound to perform the ritual.",
-      "objectiveType": "ReachArea",
-      "targetId": "BrokenMound",
-      "requiredCount": 1
-    },
-    {
-      "objectiveName": "Unlock Nuno Trading",
-      "description": "Talk to Nuno sa Punso to gain trading access.",
+      "objectiveName": "Give Herbs to Nuno",
+      "description": "Bring the herbs to the Nuno sa Punso to complete the ritual.",
       "objectiveType": "TalkTo",
       "targetId": "NunoSaPunso",
       "requiredCount": 1
     },
     {
-      "objectiveName": "Scout the wrecks",
-      "description": "Find the shipwreck",
-      "objectiveType": "ReachArea",
+      "objectiveName": "Find the Shipwreck",
+      "description": "Search for the shipwreck in the coastal area.",
+      "objectiveType": "FindArea",
       "targetId": "ShipWreck",
       "requiredCount": 1
     },
     {
-      "objectiveName": "Find the ship remnants",
-      "description": "Search 3 wreck clusters for ship remnants.",
+      "objectiveName": "Find Ship Remnants",
+      "description": "Collect 3 ship remnants from the wreckage.",
       "objectiveType": "Collect",
       "targetId": "ShipRemnant",
-      "requiredCount": 3
+      "requiredCount": 3,
+      "collectItemIds": ["ShipRemnant"],
+      "collectQuantities": [3]
     },
     {
-      "objectiveName": "Clear chokepoints",
-      "description": "Reach each chokepoint and defeat enemies.",
-      "objectiveType": "ReachArea",
-      "targetId": "Chokepoint",
-      "requiredCount": 1
-    },
-    {
-      "objectiveName": "Miniboss: Defeat Berberoka",
-      "description": "Defeat Berberoka at the camp.",
+      "objectiveName": "Clear the Broken Ship Area",
+      "description": "Defeat all enemies around the broken ship.",
       "objectiveType": "Kill",
-      "targetId": "Berberoka",
+      "targetId": "ShipAreaEnemies",
       "requiredCount": 1
     },
     {
-      "objectiveName": "Breach the shipyard",
-      "description": "Enter the shipyard area.",
-      "objectiveType": "ReachArea",
-      "targetId": "Shipyard",
-      "requiredCount": 1
-    },
-    {
-      "objectiveName": "Seize the boat and depart",
-      "description": "Clear the colonizer deck.",
-      "objectiveType": "Kill",
-      "targetId": "ColonizerDeck",
-      "requiredCount": 1
-    },
-    {
-      "objectiveName": "Tow from shallows",
-      "description": "Reach the shallows to prepare for departure.",
-      "objectiveType": "ReachArea",
-      "targetId": "Shallows",
-      "requiredCount": 1
-    },
-    {
-      "objectiveName": "All aboard to end the chapter",
-      "description": "All players must reach the ship exit.",
-      "objectiveType": "ReachArea",
-      "targetId": "ShipExit",
-      "requiredCount": 1
+      "objectiveName": "Repair the Ship",
+      "description": "Gather materials to repair the ship: 3 Ship Remnants, 6 Cloth, and 4 Strings.",
+      "objectiveType": "Collect",
+      "targetId": "ShipRemnant",
+      "requiredCount": 13,
+      "collectItemIds": ["ShipRemnant", "Cloth", "Strings"],
+      "collectQuantities": [3, 6, 4]
     }
   ]
 }

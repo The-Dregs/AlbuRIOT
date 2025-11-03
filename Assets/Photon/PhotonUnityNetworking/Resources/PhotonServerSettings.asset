@@ -101,6 +101,12 @@ MonoBehaviour:
   - RPC_SyncHitState
   - RPC_HitPopEffect
   - RPC_StartSinkAnimation
+  - RPC_SetBool
+  - RPC_SetTrigger
+  - RPC_OnRevived
+  - RPC_Revive
+  - RPC_SetDowned
+  - RPC_PlayCrawlDeath
   DisableAutoOpenWizard: 1
   ShowSettings: 1
   DevRegionSetOnce: 1

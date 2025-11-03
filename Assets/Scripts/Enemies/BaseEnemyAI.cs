@@ -150,13 +150,27 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
         isBusy = true;
         aiState = state;
         if (setAnimatorBusy && animator != null && HasBool("Busy"))
+        {
             animator.SetBool("Busy", true);
+            // Sync to other clients
+            if (photonView != null && PhotonNetwork.IsConnected && !PhotonNetwork.OfflineMode)
+            {
+                photonView.RPC("RPC_SetBool", RpcTarget.Others, "Busy", true);
+            }
+        }
     }
 
     protected void EndAction(bool clearAnimatorBusy = true)
     {
         if (clearAnimatorBusy && animator != null && HasBool("Busy"))
+        {
             animator.SetBool("Busy", false);
+            // Sync to other clients
+            if (photonView != null && PhotonNetwork.IsConnected && !PhotonNetwork.OfflineMode)
+            {
+                photonView.RPC("RPC_SetBool", RpcTarget.Others, "Busy", false);
+            }
+        }
         isBusy = false;
         aiState = AIState.Idle;
         // Apply a post-action busy equal to basic attack cooldown
@@ -508,10 +522,15 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
             Debug.Log($"[{gameObject.name}] Took {amount} damage. Health: {currentHealth}/{enemyData.maxHealth}");
         }
         
-        // Trigger hit animation
+        // Trigger hit animation (sync to all clients)
         if (animator != null && HasTrigger(hitTrigger))
         {
             animator.SetTrigger(hitTrigger);
+            // Sync animation to other clients
+            if (photonView != null && PhotonNetwork.IsConnected && !PhotonNetwork.OfflineMode)
+            {
+                photonView.RPC("RPC_SetTrigger", RpcTarget.Others, hitTrigger);
+            }
         }
         
         if (currentHealth <= 0)
@@ -540,13 +559,27 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
             Debug.Log($"[{gameObject.name}] Died");
         }
         
-        // Trigger death animation
+        // Trigger death animation (sync to all clients)
         if (animator != null)
         {
             if (HasBool(isDeadBool))
+            {
                 animator.SetBool(isDeadBool, true);
+                // Sync bool to other clients
+                if (photonView != null && PhotonNetwork.IsConnected && !PhotonNetwork.OfflineMode)
+                {
+                    photonView.RPC("RPC_SetBool", RpcTarget.Others, isDeadBool, true);
+                }
+            }
             if (HasTrigger(dieTrigger))
+            {
                 animator.SetTrigger(dieTrigger);
+                // Sync trigger to other clients
+                if (photonView != null && PhotonNetwork.IsConnected && !PhotonNetwork.OfflineMode)
+                {
+                    photonView.RPC("RPC_SetTrigger", RpcTarget.Others, dieTrigger);
+                }
+            }
         }
         
         // Disable movement
@@ -696,6 +729,82 @@ public abstract class BaseEnemyAI : MonoBehaviourPun, IEnemyDamageable
     public float BasicCooldownRemaining => Mathf.Max(0f, attackLockTimer);
     public float BasicCooldownTime => enemyData != null ? Mathf.Max(0f, enemyData.attackCooldown - (Time.time - lastAttackTime)) : 0f;
     public AIState CurrentState => aiState;
+    
+    #endregion
+    
+    #region Network Synchronization RPCs
+    
+    /// <summary>
+    /// RPC to sync animator trigger across network
+    /// </summary>
+    [PunRPC]
+    public void RPC_SetTrigger(string triggerName)
+    {
+        if (animator != null && HasTrigger(triggerName))
+        {
+            animator.SetTrigger(triggerName);
+        }
+    }
+    
+    /// <summary>
+    /// Helper method to trigger animation and sync to network. Use this for attack animations.
+    /// </summary>
+    protected void SetTriggerSync(string triggerName)
+    {
+        if (animator != null && HasTrigger(triggerName))
+        {
+            animator.SetTrigger(triggerName);
+            // Sync to other clients
+            if (photonView != null && PhotonNetwork.IsConnected && !PhotonNetwork.OfflineMode)
+            {
+                photonView.RPC("RPC_SetTrigger", RpcTarget.Others, triggerName);
+            }
+        }
+    }
+    
+    /// <summary>
+    /// RPC to sync animator bool across network
+    /// </summary>
+    [PunRPC]
+    public void RPC_SetBool(string boolName, bool value)
+    {
+        if (animator != null && HasBool(boolName))
+        {
+            animator.SetBool(boolName, value);
+        }
+    }
+    
+    /// <summary>
+    /// Helper method to spawn VFX locally and sync spawn command to other clients.
+    /// Usage: After Instantiate, call this to notify other clients to spawn the same VFX.
+    /// NOTE: This requires enemy AIs to override or implement VFX spawning with resource paths or shared prefab references.
+    /// For immediate VFX sync, spawn VFX locally then call photonView.RPC("RPC_SpawnVFX", RpcTarget.Others, ...) with appropriate parameters.
+    /// </summary>
+    protected void SpawnVFXSync(GameObject vfxPrefab, Vector3 localOffset, Vector3 scale, bool parentToTransform = true)
+    {
+        if (vfxPrefab == null) return;
+        
+        // Spawn locally first
+        GameObject vfxInstance;
+        if (parentToTransform)
+        {
+            vfxInstance = Instantiate(vfxPrefab, transform);
+            vfxInstance.transform.localPosition = localOffset;
+        }
+        else
+        {
+            vfxInstance = Instantiate(vfxPrefab, transform.position + localOffset, transform.rotation);
+        }
+        if (scale != Vector3.zero && scale != Vector3.one)
+        {
+            vfxInstance.transform.localScale = scale;
+        }
+        
+        // Notify other clients - they will need to spawn locally using the same prefab reference
+        // NOTE: This only works if the prefab is accessible to all clients (e.g., in Resources or shared reference)
+        // For now, individual enemy AIs should implement their own VFX sync RPCs if needed
+        // Example pattern: Store VFX prefab reference, spawn locally, then RPC with identifier to spawn on others
+    }
     
     #endregion
 }

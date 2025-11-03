@@ -5,7 +5,7 @@ using System.Collections.Generic;
 using Photon.Pun;
 using AlbuRIOT.Abilities;
 
-public enum ObjectiveType { Kill, Collect, TalkTo, ReachArea, ShrineOffering, PowerSteal, Custom }
+public enum ObjectiveType { Kill, Collect, TalkTo, ReachArea, FindArea, ShrineOffering, PowerSteal, Custom }
 
 [System.Serializable]
 public class QuestObjective
@@ -16,7 +16,7 @@ public class QuestObjective
     public ObjectiveType objectiveType = ObjectiveType.Custom;
     
     [Header("Target Information")]
-    [Tooltip("for Kill: enemy name; for Collect: item name; for TalkTo/ReachArea: id string; for ShrineOffering: shrine id")] 
+    [Tooltip("for Kill: enemy name; for Collect: item name; for TalkTo/ReachArea/FindArea: id string; for ShrineOffering: shrine id")] 
     public string targetId;
     [Tooltip("how many actions required to complete the objective")] 
     public int requiredCount = 1;
@@ -302,7 +302,7 @@ public class QuestManager : MonoBehaviourPun
     {
         Quest currentQuest = GetCurrentQuest();
         if (currentQuest == null || currentQuest.isCompleted) return;
-        bool isGroupArea = (type == ObjectiveType.ReachArea) && QuestAreaTrigger_GroupRequiresAll();
+        bool isGroupArea = (type == ObjectiveType.ReachArea || type == ObjectiveType.FindArea) && QuestAreaTrigger_GroupRequiresAll();
         // Only master/client relays group area; other objectives are local-only.
         if (currentQuest.objectives != null && currentQuest.objectives.Length > 0)
         {
@@ -526,6 +526,11 @@ public class QuestManager : MonoBehaviourPun
     public void AddProgress_ReachArea(string areaId)
     {
         UpdateObjectiveProgress(ObjectiveType.ReachArea, areaId, 1);
+    }
+    
+    public void AddProgress_FindArea(string areaId)
+    {
+        UpdateObjectiveProgress(ObjectiveType.FindArea, areaId, 1);
     }
     
     // ---- new objective types ----

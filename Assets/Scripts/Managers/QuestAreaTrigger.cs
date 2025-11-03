@@ -100,8 +100,8 @@ public class QuestAreaTrigger : MonoBehaviourPunCallbacks
                         var qm = FindFirstObjectByType<QuestManager>();
                         if (qm != null)
                         {
-                            qm.AddProgress_ReachArea(areaId);
-                            Debug.Log($"quest reach progress updated (mp solo) for area: {areaId}");
+                            AddProgressForAreaType(qm, areaId);
+                            Debug.Log($"quest area progress updated (mp solo) for area: {areaId}");
                             if (oneShot && _col != null) _col.enabled = false;
                         }
                         else
@@ -126,8 +126,8 @@ public class QuestAreaTrigger : MonoBehaviourPunCallbacks
                 var qm = FindFirstObjectByType<QuestManager>();
                 if (qm != null)
                 {
-                    qm.AddProgress_ReachArea(areaId);
-                    Debug.Log($"quest reach progress updated (offline) for area: {areaId}");
+                    AddProgressForAreaType(qm, areaId);
+                    Debug.Log($"quest area progress updated (offline) for area: {areaId}");
                     if (oneShot && _col != null) _col.enabled = false;
                 }
             }
@@ -234,7 +234,7 @@ public class QuestAreaTrigger : MonoBehaviourPunCallbacks
                 var qm = FindFirstObjectByType<QuestManager>();
                 if (qm != null)
                 {
-                    qm.AddProgress_ReachArea(areaId);
+                    AddProgressForAreaType(qm, areaId);
                     Debug.LogWarning($"no PlayerQuestRelay found; progressed master's quest for area {areaId} as fallback");
                 }
             }
@@ -245,6 +245,37 @@ public class QuestAreaTrigger : MonoBehaviourPunCallbacks
         UpdateCounterText();
     }
 
+    private void AddProgressForAreaType(QuestManager qm, string areaId)
+    {
+        var q = qm.GetCurrentQuest();
+        if (q == null) return;
+        
+        var obj = q.GetCurrentObjective();
+        if (obj != null)
+        {
+            if (obj.objectiveType == ObjectiveType.FindArea)
+            {
+                qm.AddProgress_FindArea(areaId);
+            }
+            else if (obj.objectiveType == ObjectiveType.ReachArea)
+            {
+                qm.AddProgress_ReachArea(areaId);
+            }
+        }
+        else
+        {
+            // Legacy fallback
+            if (q.objectiveType == ObjectiveType.FindArea)
+            {
+                qm.AddProgress_FindArea(areaId);
+            }
+            else if (q.objectiveType == ObjectiveType.ReachArea)
+            {
+                qm.AddProgress_ReachArea(areaId);
+            }
+        }
+    }
+    
     private bool IsLocalQuestMatchingArea()
     {
         var qm = FindFirstObjectByType<QuestManager>();
@@ -256,14 +287,14 @@ public class QuestAreaTrigger : MonoBehaviourPunCallbacks
         var obj = q.GetCurrentObjective();
         if (obj != null)
         {
-            if (obj.objectiveType != ObjectiveType.ReachArea) return false;
+            if (obj.objectiveType != ObjectiveType.ReachArea && obj.objectiveType != ObjectiveType.FindArea) return false;
             var a1 = (obj.targetId ?? string.Empty).Trim();
             var b1 = (areaId ?? string.Empty).Trim();
             if (a1.Length == 0 || b1.Length == 0) return false;
             return string.Equals(a1, b1, System.StringComparison.OrdinalIgnoreCase);
         }
         // Legacy fallback
-        if (q.objectiveType != ObjectiveType.ReachArea) return false;
+        if (q.objectiveType != ObjectiveType.ReachArea && q.objectiveType != ObjectiveType.FindArea) return false;
         var a = (q.targetId ?? string.Empty).Trim();
         var b = (areaId ?? string.Empty).Trim();
         if (a.Length == 0 || b.Length == 0) return false;

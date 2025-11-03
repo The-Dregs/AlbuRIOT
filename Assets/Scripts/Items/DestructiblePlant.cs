@@ -224,7 +224,6 @@ public class DestructiblePlant : MonoBehaviourPun, IEnemyDamageable
     {
         if (isDestroyed) return;
         
-        var photonView = GetComponent<PhotonView>();
         bool isNetworked = photonView != null && PhotonNetwork.IsConnected && PhotonNetwork.InRoom;
         
         if (isNetworked)
@@ -251,7 +250,7 @@ public class DestructiblePlant : MonoBehaviourPun, IEnemyDamageable
     }
     
     [PunRPC]
-    private void RPC_ApplyHit(int sourceViewId)
+    public void RPC_ApplyHit(int sourceViewId)
     {
         GameObject source = null;
         if (sourceViewId >= 0)

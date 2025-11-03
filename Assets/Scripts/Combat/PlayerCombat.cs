@@ -13,6 +13,10 @@ public class PlayerCombat : MonoBehaviourPun
     public float attackRate = 1f;
     public int attackStaminaCost = 20;
     public LayerMask enemyLayers;
+    [Tooltip("Optional origin for attack range (use this transform's position/forward instead of the player's)")]
+    public Transform attackRangeOrigin;
+    [Tooltip("Forward offset in meters from the origin to center the attack sphere (use to make range less deep)")]
+    public float attackForwardOffset = 0.0f;
 
     [Header("Combo System")]
     [SerializeField] private float comboWindow = 0.8f; // Time to continue combo after hit
@@ -52,6 +56,8 @@ public class PlayerCombat : MonoBehaviourPun
     private float comboInputDelayTimer = 0f;
     private bool isPerformingCombo = false;
     private Coroutine currentAttackCoroutine = null;
+    // Ensures we never trigger attack animation without enough stamina
+    private bool hasPaidForCurrentHit = false;
 
     // track last damaged enemy root to attribute kills for power stealing
     public Transform LastHitEnemyRoot { get; private set; }
@@ -161,6 +167,7 @@ public class PlayerCombat : MonoBehaviourPun
                         finalStaminaCost = Mathf.Max(1, attackStaminaCost + stats.staminaCostModifier);
                     if (stats.UseStamina(finalStaminaCost))
                     {
+                        hasPaidForCurrentHit = true;
                         ContinueCombo();
                     }
                 }
@@ -172,6 +179,7 @@ public class PlayerCombat : MonoBehaviourPun
                         finalStaminaCost = Mathf.Max(1, attackStaminaCost + stats.staminaCostModifier);
                     if (stats.UseStamina(finalStaminaCost))
                     {
+                        hasPaidForCurrentHit = true;
                         StartComboAttack();
                     }
                     else
@@ -236,6 +244,12 @@ public class PlayerCombat : MonoBehaviourPun
     private IEnumerator CoPerformComboHit()
     {
         isPerformingCombo = true;
+        if (!hasPaidForCurrentHit)
+        {
+            // Safety: never trigger animation if stamina wasn't paid for this swing
+            isPerformingCombo = false;
+            yield break;
+        }
         
         // Set combo index parameter for animator to track which attack in combo
         int hitNumber = currentComboIndex + 1;
@@ -288,7 +302,7 @@ public class PlayerCombat : MonoBehaviourPun
         // Store locked rotation to maintain camera-facing direction during entire attack
         Quaternion lockedRotation = transform.rotation;
         
-        // Set animator parameters for combo system
+        // Set animator parameters for combo system (only after stamina paid)
         if (animator != null)
         {
             // Set combo index (0, 1, 2 for 1st, 2nd, 3rd hit)
@@ -366,14 +380,23 @@ public class PlayerCombat : MonoBehaviourPun
         // End combo performance only after attack timer fully expires (allows next input after delay)
         isPerformingCombo = false;
         currentAttackCoroutine = null;
+        hasPaidForCurrentHit = false; // require payment for next hit
     }
     
     private void ApplyComboDamage()
     {
         // Use stored attack start position and direction to keep damage area fixed in front
         // This prevents the attack area from moving with root motion animations
-        Vector3 damageCenter = attackStartPosition + attackStartForward * attackRange * 0.5f;
-        Collider[] hitEnemies = Physics.OverlapSphere(damageCenter, attackRange * 0.5f, enemyLayers);
+        Vector3 originPos = attackStartPosition;
+        Vector3 originFwd = attackStartForward;
+        if (attackRangeOrigin != null)
+        {
+            originPos = attackRangeOrigin.position;
+            originFwd = attackRangeOrigin.forward;
+        }
+        float radius = attackRange * 0.5f;
+        Vector3 damageCenter = originPos + originFwd * (radius + attackForwardOffset);
+        Collider[] hitEnemies = Physics.OverlapSphere(damageCenter, radius, enemyLayers);
         
         // Deduplicate targets
         var uniqueEnemies = new System.Collections.Generic.HashSet<GameObject>();
@@ -547,8 +570,15 @@ public class PlayerCombat : MonoBehaviourPun
     
     void Attack()
     {
-        // Legacy method - kept for backwards compatibility, but combo system handles attacks now
-        StartComboAttack();
+        // Legacy method - ensure stamina check before starting
+        int finalStaminaCost = attackStaminaCost;
+        if (stats != null)
+            finalStaminaCost = Mathf.Max(1, attackStaminaCost + stats.staminaCostModifier);
+        if (stats != null && stats.UseStamina(finalStaminaCost))
+        {
+            hasPaidForCurrentHit = true;
+            StartComboAttack();
+        }
     }
     
     // power stealing is granted by enemy death logic (PowerDropOnDeath) and quest updates handled there
@@ -566,6 +596,14 @@ public class PlayerCombat : MonoBehaviourPun
     void OnDrawGizmosSelected()
     {
         Gizmos.color = Color.red;
-        Gizmos.DrawWireSphere(transform.position + transform.forward * attackRange * 0.5f, attackRange * 0.5f);
+        Vector3 gPos = transform.position;
+        Vector3 gFwd = transform.forward;
+        if (attackRangeOrigin != null)
+        {
+            gPos = attackRangeOrigin.position;
+            gFwd = attackRangeOrigin.forward;
+        }
+        float r = attackRange * 0.5f;
+        Gizmos.DrawWireSphere(gPos + gFwd * (r + attackForwardOffset), r);
     }
 }

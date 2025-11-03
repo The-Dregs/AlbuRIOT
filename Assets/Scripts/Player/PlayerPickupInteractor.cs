@@ -37,14 +37,10 @@ public class PlayerPickupInteractor : MonoBehaviour
             if (nearbyPickup != null && !nearbyPickup.IsPickedUp)
             {
                 nearbyPickup.ForcePickup(gameObject);
+                // Hide the HUD immediately after pickup (notification system handles the pickup message)
                 if (playerHUD != null)
                 {
-                    string itemName = nearbyPickup.ItemData != null ? nearbyPickup.ItemData.itemName : "item";
-                    int qty = nearbyPickup.Quantity;
-                    string qtyText = qty > 1 ? $" x{qty}" : "";
-                    playerHUD.Show($"Picked up {itemName}{qtyText}!");
-                    CancelInvoke(nameof(HideHUD));
-                    Invoke(nameof(HideHUD), 2f);
+                    playerHUD.Hide();
                 }
             }
         }

@@ -7,7 +7,7 @@ public static class EnemyDamageRelay
     public static void Apply(GameObject enemy, int amount, GameObject source)
     {
         if (enemy == null) return;
-        var pv = enemy.GetComponent<PhotonView>();
+        
         int sourceViewId = -1;
         var srcPv = source != null ? source.GetComponent<PhotonView>() : null;
         if (srcPv != null) sourceViewId = srcPv.ViewID;
@@ -40,9 +40,27 @@ public static class EnemyDamageRelay
                 dmg.TakeEnemyDamage(amount, source);
             }
         }
-        else if (pv != null)
+        else
         {
-            pv.RPC("RPC_EnemyTakeDamage", RpcTarget.MasterClient, amount, sourceViewId);
+            // Get PhotonView from the BaseEnemyAI component (MonoBehaviourPun provides photonView)
+            var enemyAI = enemy.GetComponent<BaseEnemyAI>();
+            if (enemyAI != null && enemyAI.photonView != null)
+            {
+                enemyAI.photonView.RPC("RPC_EnemyTakeDamage", RpcTarget.MasterClient, amount, sourceViewId);
+            }
+            else
+            {
+                // Fallback: try GetComponent if MonoBehaviourPun approach doesn't work
+                var pv = enemy.GetComponent<PhotonView>();
+                if (pv != null)
+                {
+                    pv.RPC("RPC_EnemyTakeDamage", RpcTarget.MasterClient, amount, sourceViewId);
+                }
+                else
+                {
+                    Debug.LogWarning($"[EnemyDamageRelay] No PhotonView found on enemy {enemy.name}. Cannot send damage RPC.");
+                }
+            }
         }
     }
 }

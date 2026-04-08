@@ -15,3 +15,4 @@ MonoBehaviour:
   lines:
   - speaker: Colonizer General
     text: GET THE BANANAS, WHAT ARE YOU WAITING FOR?
+    soundClip: {fileID: 8300000, guid: 9f8fabab5014d6c42a82819534318b43, type: 3}

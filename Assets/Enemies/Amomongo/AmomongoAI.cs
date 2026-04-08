@@ -58,7 +58,6 @@ public class AmomongoAI : BaseEnemyAI
     private float lastBerserkTime = -9999f;
     private bool isBerserk = false;
     private float berserkTimer = 0f;
-    private AudioSource audioSource;
     private Coroutine activeAbility;
     private Coroutine basicRoutine;
 
@@ -70,11 +69,7 @@ public class AmomongoAI : BaseEnemyAI
 
     #region Initialization
 
-    protected override void InitializeEnemy()
-    {
-        audioSource = GetComponent<AudioSource>();
-        if (audioSource == null) audioSource = gameObject.AddComponent<AudioSource>();
-    }
+    protected override void InitializeEnemy() { }
 
     protected override void BuildBehaviorTree()
     {
@@ -82,7 +77,7 @@ public class AmomongoAI : BaseEnemyAI
         var hasTarget = new ConditionNode(blackboard, HasTarget, "has_target");
         var targetInDetection = new ConditionNode(blackboard, TargetInDetectionRange, "in_detect_range");
         var moveToTarget = new ActionNode(blackboard, MoveTowardsTarget, "move_to_target");
-        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRange, "in_attack_range");
+        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRangeAndFacing, "in_attack_range_facing");
         var basicAttack = new ActionNode(blackboard, BasicAttackNode, "basic");
 
         var canSlam = new ConditionNode(blackboard, CanSlam, "can_slam");
@@ -141,38 +136,28 @@ public class AmomongoAI : BaseEnemyAI
     private IEnumerator CoBasicAttack(Transform target)
     {
         BeginAction(AIState.BasicAttack);
+        Quaternion lockedRotation = transform.rotation;
         
-        // Windup animation trigger
-        if (animator != null)
-        {
-            if (HasTrigger(attackWindupTrigger))
-                animator.SetTrigger(attackWindupTrigger);
-            else if (HasTrigger(attackTrigger))
-                animator.SetTrigger(attackTrigger);
-        }
+        // Windup animation trigger (sync to network)
+        if (HasTrigger(attackWindupTrigger))
+            SetTriggerSync(attackWindupTrigger);
+        else if (HasTrigger(attackTrigger))
+            SetTriggerSync(attackTrigger);
+        PlayAttackWindupSfx();
 
         float wind = Mathf.Max(0f, basicWindup > 0f ? basicWindup : enemyData.attackWindup);
         while (wind > 0f)
         {
             wind -= Time.deltaTime;
+            transform.rotation = lockedRotation;
             if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
-            // face target
-            if (target != null)
-            {
-                Vector3 look = new Vector3(target.position.x, transform.position.y, target.position.z);
-                Vector3 lookDir = (look - transform.position);
-                if (lookDir.sqrMagnitude > 0.0001f)
-                {
-                    Quaternion targetRot = Quaternion.LookRotation(lookDir);
-                    transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, RotationSpeed * Time.deltaTime);
-                }
-            }
             yield return null;
         }
 
-        // Impact animation trigger
-        if (animator != null && HasTrigger(attackImpactTrigger))
-            animator.SetTrigger(attackImpactTrigger);
+        // Impact animation trigger (sync to network)
+        if (HasTrigger(attackImpactTrigger))
+            SetTriggerSync(attackImpactTrigger);
+        PlayAttackImpactSfx();
 
         // Apply damage
         float radius = Mathf.Max(0.8f, enemyData.attackRange);
@@ -183,17 +168,20 @@ public class AmomongoAI : BaseEnemyAI
         foreach (var c in cols)
         {
             var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null) ps.TakeDamage(dmg);
+        if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, dmg);
         }
 
-        // Post stop and global lock
+        // Exhausted phase - lock position, rotation, set Exhausted animator
         float post = Mathf.Max(0f, basicPostStop);
+        if (post > 0f && HasBool("Exhausted")) SetBoolSync("Exhausted", true);
         while (post > 0f)
         {
             post -= Time.deltaTime;
+            transform.rotation = lockedRotation;
             if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
             yield return null;
         }
+        if (HasBool("Exhausted")) SetBoolSync("Exhausted", false);
 
         lastAttackTime = Time.time;
         attackLockTimer = enemyData.attackMoveLock;
@@ -247,8 +235,8 @@ public class AmomongoAI : BaseEnemyAI
     private IEnumerator CoSlam()
     {
         BeginAction(AIState.Special1);
-        if (animator != null && HasBool(busyBool)) animator.SetBool(busyBool, true);
-        if (animator != null && HasTrigger(slamTrigger)) animator.SetTrigger(slamTrigger);
+        if (HasBool(busyBool)) SetBoolSync(busyBool, true);
+        if (HasTrigger(slamTrigger)) SetTriggerSync(slamTrigger);
 
         // Windup SFX (stoppable)
         if (audioSource != null && slamSFX != null)
@@ -306,14 +294,14 @@ public class AmomongoAI : BaseEnemyAI
             var fx = Instantiate(slamImpactVFX, worldPos, transform.rotation);
             if (slamImpactVFXScale > 0f) fx.transform.localScale = Vector3.one * slamImpactVFXScale;
         }
-        if (audioSource != null && slamImpactSFX != null) audioSource.PlayOneShot(slamImpactSFX);
+        PlaySfx(slamImpactSFX);
         
         int damage = isBerserk ? slamDamageBerserk : slamDamage;
         var cols = Physics.OverlapSphere(transform.position, slamRadius, LayerMask.GetMask("Player"));
         foreach (var c in cols)
         {
             var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null) ps.TakeDamage(damage);
+        if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, damage);
         }
 
         // Post-slam stoppage
@@ -334,7 +322,7 @@ public class AmomongoAI : BaseEnemyAI
             yield return null;
         }
 
-        if (animator != null && HasBool(busyBool)) animator.SetBool(busyBool, false);
+        if (HasBool(busyBool)) SetBoolSync(busyBool, false);
         activeAbility = null;
         lastAttackTime = Time.time;
         attackLockTimer = enemyData != null ? enemyData.attackMoveLock : 0.25f;
@@ -366,8 +354,8 @@ public class AmomongoAI : BaseEnemyAI
     private IEnumerator CoBerserk()
     {
         BeginAction(AIState.Special2);
-        if (animator != null && HasBool(busyBool)) animator.SetBool(busyBool, true);
-        if (animator != null && HasTrigger(berserkTrigger)) animator.SetTrigger(berserkTrigger);
+        if (HasBool(busyBool)) SetBoolSync(busyBool, true);
+        if (HasTrigger(berserkTrigger)) SetTriggerSync(berserkTrigger);
 
         // Windup SFX (stoppable)
         if (audioSource != null && berserkSFX != null)
@@ -409,7 +397,7 @@ public class AmomongoAI : BaseEnemyAI
             fx.transform.localPosition = berserkImpactVFXOffset;
             if (berserkImpactVFXScale > 0f) fx.transform.localScale = Vector3.one * berserkImpactVFXScale;
         }
-        if (audioSource != null && berserkImpactSFX != null) audioSource.PlayOneShot(berserkImpactSFX);
+        PlaySfx(berserkImpactSFX);
 
         // Apply berserk state
         isBerserk = true;
@@ -418,7 +406,7 @@ public class AmomongoAI : BaseEnemyAI
         SetBuffVfx(BuffType.Damage, true, Vector3.zero, 1f);
         SetBuffVfx(BuffType.Speed, true, Vector3.zero, 1f);
 
-        if (animator != null && HasBool(busyBool)) animator.SetBool(busyBool, false);
+        if (HasBool(busyBool)) SetBoolSync(busyBool, false);
         activeAbility = null;
         lastAttackTime = Time.time;
         attackLockTimer = enemyData != null ? enemyData.attackMoveLock : 0.25f;

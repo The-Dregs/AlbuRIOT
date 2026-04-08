@@ -4,6 +4,8 @@ using System.Collections.Generic;
 
 public class PlayerStats : MonoBehaviourPun, IPunObservable
 {
+    [Header("Performance/Debug")]
+    [SerializeField] private bool enableDebugLogs = false;
     public int maxHealth = 100;
     public int currentHealth;
     public int maxStamina = 100;
@@ -48,14 +50,80 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
     [Tooltip("bleed damage per 0.5s tick while active")] public float bleedPerTick = 0f; public float bleedRemaining = 0f; private float bleedAcc = 0f;
     [Tooltip("stamina burn per 0.5s tick while active")] public float staminaBurnPerTick = 0f; public float staminaBurnRemaining = 0f; private float staminaBurnAcc = 0f;
 
+    // --- god mode (debug/cheat) ---
+    [Header("god mode")]
+    [Tooltip("When enabled, player cannot take damage and has unlimited stamina")]
+    public bool godMode = false;
+    [Header("god mode buffs")]
+    [Tooltip("VFX prefabs for god mode buffs (4=Health, 5=Stamina, 6=Damage, 7=Speed)")]
+    public GameObject[] godModeBuffVFX = new GameObject[4];
+    [Tooltip("Buff values for god mode keys")]
+    public int godModeHealthBonus = 50;
+    public int godModeStaminaBonus = 50;
+    public int godModeDamageBonus = 25;
+    public float godModeSpeedBonus = 2.0f;
+    public float godModeBuffDuration = 10f;
+    
+    private int godModeHealthBuff = 0;
+    private int godModeStaminaBuff = 0;
+    private int godModeDamageBuff = 0;
+    private float godModeSpeedBuff = 0f;
+    private System.Collections.IEnumerator[] activeBuffCoroutines = new System.Collections.IEnumerator[4];
+    private CharacterController characterController;
+    private readonly HashSet<string> animatorParamCache = new HashSet<string>();
+
+    void OnEnable() => PlayerRegistry.Register(this);
+    void OnDisable() => PlayerRegistry.Unregister(this);
+
     void Awake()
     {
         currentHealth = maxHealth;
         currentStamina = maxStamina;
         animator = GetComponent<Animator>();
         controller = GetComponent<ThirdPersonController>();
+        characterController = GetComponent<CharacterController>();
         combat = GetComponent<PlayerCombat>();
         inventory = GetComponent<Inventory>();
+        effectsManager = GetComponent<EffectsManager>();
+        if (effectsManager == null) effectsManager = GetComponent<VFXManager>();
+        audioManager = GetComponent<PlayerAudioManager>();
+        CacheAnimatorParameters();
+        
+        // Find camera shake component
+        FindCameraShake();
+    }
+
+    private void CacheAnimatorParameters()
+    {
+        animatorParamCache.Clear();
+        if (animator == null) return;
+        var parameters = animator.parameters;
+        for (int i = 0; i < parameters.Length; i++)
+            animatorParamCache.Add(parameters[i].name);
+    }
+    
+    private void FindCameraShake()
+    {
+        // Try to find CameraShake on camera or camera rig
+        if (controller != null && controller.cameraPivot != null)
+        {
+            cameraShake = controller.cameraPivot.GetComponentInChildren<CameraShake>();
+        }
+        
+        // Fallback: search in scene
+        if (cameraShake == null)
+        {
+            cameraShake = FindFirstObjectByType<CameraShake>();
+        }
+    }
+
+    /// <summary>Trigger camera shake for this player (e.g. from nearby enemy skills). Only affects local player.</summary>
+    public void TriggerCameraShake(float intensity, float duration)
+    {
+        if (intensity <= 0f || duration <= 0f) return;
+        if (cameraShake == null) FindCameraShake();
+        if (cameraShake != null && (photonView == null || photonView.IsMine))
+            cameraShake.Shake(intensity, duration);
     }
     
     void Start()
@@ -72,6 +140,11 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
         if (photonView != null && !photonView.IsMine) return;
         TickDebuffs();
         
+        if (godMode)
+        {
+            HandleGodModeBuffs();
+        }
+        
         // Handle downed state timer (multiplayer only)
         if (isDowned && !isDead)
         {
@@ -86,7 +159,7 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
             if (animator != null && AnimatorHasParameter(crawlingBoolName))
             {
                 float horizSpeed = 0f;
-                var cc = GetComponent<CharacterController>();
+                var cc = characterController;
                 if (cc != null)
                 {
                     var v = cc.velocity; v.y = 0f; horizSpeed = v.magnitude;
@@ -108,7 +181,12 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
             staminaRegenDelayTimer -= Time.deltaTime;
         }
         // regenerate only if not blocked and delay timer elapsed; use accumulator for smooth, framerate-independent regen
-        if (currentStamina < maxStamina && !staminaRegenBlocked && staminaRegenDelayTimer <= 0f)
+        // god mode: keep stamina at max
+        if (godMode)
+        {
+            currentStamina = maxStamina;
+        }
+        else if (currentStamina < maxStamina && !staminaRegenBlocked && staminaRegenDelayTimer <= 0f)
         {
             staminaRegenAccumulator += staminaRegenRate * Time.deltaTime;
             if (staminaRegenAccumulator >= 1f)
@@ -143,7 +221,7 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
                     healthRegenAccumulator -= applied;
                     if (!healthRegenWasActive)
                     {
-                        Debug.Log($"health regen started ({healthRegenPerSecond}/s)");
+                        if (enableDebugLogs) Debug.Log($"health regen started ({healthRegenPerSecond}/s)");
                         healthRegenWasActive = true;
                     }
                 }
@@ -154,7 +232,7 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
             // if regen was active but now blocked/full/dead, log once
             if (healthRegenWasActive)
             {
-                Debug.Log("health regen paused");
+                if (enableDebugLogs) Debug.Log("health regen paused");
                 healthRegenWasActive = false;
             }
         }
@@ -163,11 +241,17 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
     public void TakeDamage(int amount)
     {
         if (isDead || isDowned || isDeathSequenceRunning) return;
+        // god mode: ignore all damage
+        if (godMode)
+        {
+            if (enableDebugLogs) Debug.Log("damage ignored: god mode");
+            return;
+        }
         // invulnerable while rolling/dashing
         var controllerCmp = controller != null ? controller : GetComponent<ThirdPersonController>();
         if (controllerCmp != null && controllerCmp.IsRolling)
         {
-            Debug.Log("damage ignored: rolling");
+            if (enableDebugLogs) Debug.Log("damage ignored: rolling");
             return;
         }
     // defense down increases incoming damage
@@ -184,9 +268,15 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
             // also mark as not currently regenerating for debug
             if (healthRegenWasActive)
             {
-                Debug.Log($"health regen delayed for {healthRegenDelay:F1}s due to damage");
+                if (enableDebugLogs) Debug.Log($"health regen delayed for {healthRegenDelay:F1}s due to damage");
                 healthRegenWasActive = false;
             }
+        }
+
+        // always pulse damage overlay for any damage (including killing blow)
+        if (finalAmount > 0)
+        {
+            PulseDamageOverlay(finalAmount);
         }
 
         // play hit reaction if still alive
@@ -194,7 +284,16 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
         {
             PlayHitFX();
             ShowDamageIndicator(finalAmount);
-            PulseDamageOverlay(finalAmount);
+            
+            // Play hit sound (prefer EffectsManager, fallback to PlayerAudioManager)
+            if (effectsManager != null)
+                effectsManager.PlayHitSound();
+            else if (audioManager != null)
+                audioManager.PlayHitSound();
+            
+            // Camera shake on hit
+            if (cameraShake != null && (photonView == null || photonView.IsMine))
+                cameraShake.ShakeGetHit();
         }
         else if (currentHealth <= 0)
         {
@@ -203,15 +302,21 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
         }
     }
 
-    // network entry point for enemy damage; invoked on the owning client
+    // network entry point for enemy damage; only the owning client applies (for correct damage UI)
     [PunRPC]
     public void RPC_TakeDamage(int amount)
     {
+        if (photonView != null && !photonView.IsMine) return;
         TakeDamage(amount);
     }
 
     public bool UseStamina(int amount)
     {
+        // god mode: unlimited stamina, always return true
+        if (godMode)
+        {
+            return true;
+        }
         if (currentStamina >= amount)
         {
             currentStamina -= amount;
@@ -253,7 +358,7 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
             {
                 animator.SetBool("IsExhausted", true);
             }
-            Debug.Log("[PlayerStats] Player exhausted (stamina = 0)");
+            if (enableDebugLogs) Debug.Log("[PlayerStats] Player exhausted (stamina = 0)");
         }
         // Maintain exhausted state and slow while stamina is below threshold
         else if (isExhausted && !canExitExhausted)
@@ -276,7 +381,7 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
             {
                 animator.SetBool("IsExhausted", false);
             }
-            Debug.Log($"[PlayerStats] Player recovered from exhaustion (stamina = {currentStamina}, threshold = {recoveryThreshold})");
+            if (enableDebugLogs) Debug.Log($"[PlayerStats] Player recovered from exhaustion (stamina = {currentStamina}, threshold = {recoveryThreshold})");
         }
     }
     
@@ -308,7 +413,7 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
             {
                 staminaBurnAcc -= 0.5f;
                 int burn = Mathf.RoundToInt(Mathf.Max(0f, staminaBurnPerTick));
-                if (burn > 0)
+                if (burn > 0 && !godMode) // god mode: ignore stamina burn
                 {
                     currentStamina = Mathf.Max(0, currentStamina - burn);
                     staminaRegenDelayTimer = Mathf.Max(staminaRegenDelayTimer, 0.5f);
@@ -447,12 +552,7 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
 
     private bool AnimatorHasParameter(string name)
     {
-        if (animator == null) return false;
-        foreach (var p in animator.parameters)
-        {
-            if (p.name == name) return true;
-        }
-        return false;
+        return animator != null && !string.IsNullOrEmpty(name) && animatorParamCache.Contains(name);
     }
 
     private void PlayHitFX()
@@ -707,11 +807,14 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
         }
     }
     
+    private DownedOverlayUI cachedDownedOverlay;
+    
     private void ShowDownedOverlay()
     {
-        if (photonView != null && !photonView.IsMine) return; // Only show for local player
-        var overlay = FindFirstObjectByType<DownedOverlayUI>();
-        if (overlay != null)
+        if (photonView != null && !photonView.IsMine) return;
+        if (cachedDownedOverlay == null)
+            cachedDownedOverlay = FindFirstObjectByType<DownedOverlayUI>();
+        if (cachedDownedOverlay != null)
         {
             // Overlay will handle showing itself in Update()
         }
@@ -792,12 +895,23 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
     
     private void HideDownedOverlay()
     {
-        if (photonView != null && !photonView.IsMine) return; // Only hide for local player
-        var overlay = FindFirstObjectByType<DownedOverlayUI>();
-        if (overlay != null)
+        if (photonView != null && !photonView.IsMine) return;
+        if (cachedDownedOverlay == null)
+            cachedDownedOverlay = FindFirstObjectByType<DownedOverlayUI>();
+        if (cachedDownedOverlay != null)
         {
             // Overlay will handle hiding itself in Update()
         }
+    }
+    
+    void OnDestroy()
+    {
+        // Stop all coroutines
+        StopAllCoroutines();
+        
+        // Clear cached references
+        cachedDamageOverlay = null;
+        cachedDownedOverlay = null;
     }
 
     [PunRPC]
@@ -812,6 +926,8 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
     [PunRPC]
     private void RPC_PlayDeath()
     {
+        if (effectsManager != null)
+            effectsManager.PlayDeathSound();
         // animation flags
         if (animator != null)
         {
@@ -838,6 +954,8 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
     [PunRPC]
     private void RPC_PlayCrawlDeath()
     {
+        if (effectsManager != null)
+            effectsManager.PlayDeathSound();
         // animation flags for crawl-specific death
         if (animator != null)
         {
@@ -866,13 +984,18 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
     public bool enableDamageText = false;
     public GameObject damageTextPrefab; // optional, shows numbers like enemies
     public Transform damageTextSpawnPoint;
+    
+    [Header("Audio")]
+    private EffectsManager effectsManager;
+    private PlayerAudioManager audioManager;
+    private CameraShake cameraShake;
 
     private void ShowDamageIndicator(int amount)
     {
-        Debug.Log($"[PlayerStats] ShowDamageIndicator called with amount={amount}, enableDamageText={enableDamageText}, prefab={damageTextPrefab}");
+        if (enableDebugLogs) Debug.Log($"[PlayerStats] ShowDamageIndicator called with amount={amount}, enableDamageText={enableDamageText}, prefab={damageTextPrefab}");
         if (!enableDamageText) 
         {
-            Debug.Log("[PlayerStats] Damage text disabled, returning");
+            if (enableDebugLogs) Debug.Log("[PlayerStats] Damage text disabled, returning");
             return;
         }
         if (damageTextPrefab == null) 
@@ -883,21 +1006,72 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
         Vector3 spawnPos = damageTextSpawnPoint != null ? damageTextSpawnPoint.position : transform.position + Vector3.up * 2f;
         var go = Instantiate(damageTextPrefab, spawnPos, Quaternion.identity);
         var dmg = go.GetComponent<DamageText>();
-        Debug.Log($"[PlayerStats] Instantiated prefab, DamageText component: {dmg}");
+        if (enableDebugLogs) Debug.Log($"[PlayerStats] Instantiated prefab, DamageText component: {dmg}");
         if (dmg != null) dmg.ShowDamage(amount);
         else Debug.LogError("[PlayerStats] DamageText component not found on instantiated prefab!");
     }
 
-    // pulse local screen overlay (if present) when damaged
+    [Header("Damage Overlay (optional)")]
+    [Tooltip("Assign directly for reliable damage flash. If unset, will auto-search.")]
+    public DamageOverlayUI damageOverlayUI;
+    private DamageOverlayUI cachedDamageOverlay;
+    
     private void PulseDamageOverlay(int amount)
     {
-        if (photonView != null && !photonView.IsMine) return; // local screen only
-    var overlay = FindFirstObjectByType<DamageOverlayUI>();
+        if (photonView != null && !photonView.IsMine) return;
+
+        DamageOverlayUI overlay = ResolveDamageOverlay();
         if (overlay != null)
         {
             float proportion = maxHealth > 0 ? (float)amount / (float)maxHealth : 0.2f;
-            overlay.Pulse(Mathf.Clamp01(proportion * 3f)); // scale up a bit
+            overlay.Pulse(Mathf.Clamp01(proportion * 3f));
         }
+        else if (enableDebugLogs)
+        {
+            Debug.LogWarning("[PlayerStats] PulseDamageOverlay: no DamageOverlayUI found. Assign damageOverlayUI in Inspector for reliability.");
+        }
+    }
+
+    private DamageOverlayUI ResolveDamageOverlay()
+    {
+        // 1. Direct assignment (most reliable)
+        if (damageOverlayUI != null) return damageOverlayUI;
+
+        // 2. Validate cache (cleared when destroyed)
+        if (cachedDamageOverlay != null) return cachedDamageOverlay;
+
+        // 3. Player's own hierarchy (includes Camera/Canvas)
+        cachedDamageOverlay = GetComponentInChildren<DamageOverlayUI>(true);
+
+        // 4. Camera pivot (HUD often lives here)
+        if (cachedDamageOverlay == null && controller != null && controller.cameraPivot != null)
+            cachedDamageOverlay = controller.cameraPivot.GetComponentInChildren<DamageOverlayUI>(true);
+
+        // 5. Root transform (covers nested prefab structures)
+        if (cachedDamageOverlay == null && transform.root != null)
+            cachedDamageOverlay = transform.root.GetComponentInChildren<DamageOverlayUI>(true);
+
+        // 6. Scene-wide — prefer overlay belonging to local player
+        if (cachedDamageOverlay == null)
+        {
+            var all = FindObjectsByType<DamageOverlayUI>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            if (all != null && all.Length > 0)
+            {
+                foreach (var d in all)
+                {
+                    var pv = d.GetComponentInParent<PhotonView>();
+                    if (pv == null || pv.IsMine)
+                    {
+                        cachedDamageOverlay = d;
+                        break;
+                    }
+                }
+                if (cachedDamageOverlay == null)
+                    cachedDamageOverlay = all[0];
+            }
+        }
+
+        return cachedDamageOverlay;
     }
 
     // convenience accessors for controllers
@@ -922,6 +1096,170 @@ public class PlayerStats : MonoBehaviourPun, IPunObservable
             maxHealth = (int)stream.ReceiveNext();
             currentStamina = (int)stream.ReceiveNext();
             maxStamina = (int)stream.ReceiveNext();
+        }
+    }
+    
+    private void HandleGodModeBuffs()
+    {
+        if (Input.GetKeyDown(KeyCode.Alpha4))
+        {
+            ApplyGodModeBuff(0, godModeHealthBonus, 0, 0, 0f);
+        }
+        if (Input.GetKeyDown(KeyCode.Alpha5))
+        {
+            ApplyGodModeBuff(1, 0, godModeStaminaBonus, 0, 0f);
+        }
+        if (Input.GetKeyDown(KeyCode.Alpha6))
+        {
+            ApplyGodModeBuff(2, 0, 0, godModeDamageBonus, 0f);
+        }
+        if (Input.GetKeyDown(KeyCode.Alpha7))
+        {
+            ApplyGodModeBuff(3, 0, 0, 0, godModeSpeedBonus);
+        }
+    }
+    
+    private void ApplyGodModeBuff(int buffIndex, int healthBonus, int staminaBonus, int damageBonus, float speedBonus)
+    {
+        if (activeBuffCoroutines[buffIndex] != null)
+        {
+            StopCoroutine(activeBuffCoroutines[buffIndex]);
+        }
+        
+        activeBuffCoroutines[buffIndex] = ApplyGodModeBuffCoroutine(buffIndex, healthBonus, staminaBonus, damageBonus, speedBonus);
+        StartCoroutine(activeBuffCoroutines[buffIndex]);
+    }
+    
+    private System.Collections.IEnumerator ApplyGodModeBuffCoroutine(int buffIndex, int healthBonus, int staminaBonus, int damageBonus, float speedBonus)
+    {
+        if (healthBonus > 0)
+        {
+            maxHealth += healthBonus;
+            godModeHealthBuff += healthBonus;
+            currentHealth = Mathf.Min(currentHealth + healthBonus, maxHealth);
+        }
+        if (staminaBonus > 0)
+        {
+            maxStamina += staminaBonus;
+            godModeStaminaBuff += staminaBonus;
+            currentStamina = Mathf.Min(currentStamina + staminaBonus, maxStamina);
+        }
+        if (damageBonus > 0)
+        {
+            baseDamage += damageBonus;
+            godModeDamageBuff += damageBonus;
+        }
+        if (speedBonus > 0f)
+        {
+            speedModifier += speedBonus;
+            godModeSpeedBuff += speedBonus;
+        }
+        
+        SpawnGodModeBuffVFX(buffIndex);
+        if (enableDebugLogs) Debug.Log($"[PlayerStats] God mode buff {buffIndex} applied for {godModeBuffDuration}s");
+        
+        yield return new WaitForSeconds(godModeBuffDuration);
+        
+        if (healthBonus > 0)
+        {
+            maxHealth -= healthBonus;
+            godModeHealthBuff -= healthBonus;
+            currentHealth = Mathf.Min(currentHealth, maxHealth);
+        }
+        if (staminaBonus > 0)
+        {
+            maxStamina -= staminaBonus;
+            godModeStaminaBuff -= staminaBonus;
+            currentStamina = Mathf.Min(currentStamina, maxStamina);
+        }
+        if (damageBonus > 0)
+        {
+            baseDamage -= damageBonus;
+            godModeDamageBuff -= damageBonus;
+        }
+        if (speedBonus > 0f)
+        {
+            speedModifier -= speedBonus;
+            godModeSpeedBuff -= speedBonus;
+        }
+        
+        activeBuffCoroutines[buffIndex] = null;
+        if (enableDebugLogs) Debug.Log($"[PlayerStats] God mode buff {buffIndex} expired");
+    }
+    
+    private void SpawnGodModeBuffVFX(int buffIndex)
+    {
+        if (buffIndex < 0 || buffIndex >= godModeBuffVFX.Length || godModeBuffVFX[buffIndex] == null) return;
+        
+        Vector3 spawnPos = transform.position + Vector3.up * 1.5f;
+        GameObject vfx = Instantiate(godModeBuffVFX[buffIndex], spawnPos, Quaternion.identity);
+        
+        if (vfx != null)
+        {
+            vfx.transform.SetParent(transform);
+            vfx.transform.localPosition = Vector3.up * 1.5f;
+            
+            ParticleSystem ps = vfx.GetComponent<ParticleSystem>();
+            if (ps != null && !ps.main.loop)
+            {
+                Destroy(vfx, ps.main.duration + ps.main.startLifetime.constantMax);
+            }
+            else
+            {
+                Destroy(vfx, godModeBuffDuration);
+            }
+            
+            if (photonView != null && photonView.IsMine)
+            {
+                string prefabPath = GetBuffVFXResourcePath(godModeBuffVFX[buffIndex]);
+                if (!string.IsNullOrEmpty(prefabPath))
+                {
+                    photonView.RPC("RPC_SpawnGodModeBuffVFX", RpcTarget.Others, prefabPath, transform.position, buffIndex);
+                }
+            }
+        }
+    }
+    
+    private string GetBuffVFXResourcePath(GameObject prefab)
+    {
+        if (prefab == null) return null;
+        
+        string[] paths = { $"BuffVFX/{prefab.name}", $"VFX/{prefab.name}", prefab.name };
+        foreach (string path in paths)
+        {
+            if (Resources.Load<GameObject>(path) != null) return path;
+        }
+        return prefab.name;
+    }
+    
+    [PunRPC]
+    private void RPC_SpawnGodModeBuffVFX(string prefabPath, Vector3 position, int buffIndex)
+    {
+        GameObject prefab = Resources.Load<GameObject>(prefabPath);
+        if (prefab == null)
+        {
+            string[] altPaths = { $"BuffVFX/{prefabPath}", $"VFX/{prefabPath}", prefabPath };
+            foreach (string altPath in altPaths)
+            {
+                prefab = Resources.Load<GameObject>(altPath);
+                if (prefab != null) break;
+            }
+        }
+        
+        if (prefab != null)
+        {
+            GameObject vfx = Instantiate(prefab, transform);
+            vfx.transform.localPosition = Vector3.up * 1.5f;
+            
+            ParticleSystem ps = vfx.GetComponent<ParticleSystem>();
+            if (ps != null && !ps.main.loop)
+            {
+                Destroy(vfx, ps.main.duration + ps.main.startLifetime.constantMax);
+            }
+            else
+            {
+                Destroy(vfx, godModeBuffDuration);
+            }
         }
     }
 }

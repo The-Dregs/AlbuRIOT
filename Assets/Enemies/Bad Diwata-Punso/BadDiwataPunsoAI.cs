@@ -30,15 +30,10 @@ public class BadDiwataPunsoAI : BaseEnemyAI
     // Runtime state
     private float lastRootsTime = -9999f;
     private float lastNatureBoltTime = -9999f;
-    private AudioSource audioSource;
 
     #region Initialization
 
-    protected override void InitializeEnemy()
-    {
-        audioSource = GetComponent<AudioSource>();
-        if (audioSource == null) audioSource = gameObject.AddComponent<AudioSource>();
-    }
+    protected override void InitializeEnemy() { }
 
     protected override void BuildBehaviorTree()
     {
@@ -46,7 +41,7 @@ public class BadDiwataPunsoAI : BaseEnemyAI
         var hasTarget = new ConditionNode(blackboard, HasTarget, "has_target");
         var targetInDetection = new ConditionNode(blackboard, TargetInDetectionRange, "in_detect_range");
         var moveToTarget = new ActionNode(blackboard, MoveTowardsTarget, "move_to_target");
-        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRange, "in_attack_range");
+        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRangeAndFacing, "in_attack_range_facing");
         var basicAttack = new ActionNode(blackboard, () => { PerformBasicAttack(); return NodeState.Success; }, "basic");
 
         var canRoots = new ConditionNode(blackboard, CanRoots, "can_roots");
@@ -83,15 +78,17 @@ public class BadDiwataPunsoAI : BaseEnemyAI
         var target = blackboard.Get<Transform>("target");
         if (target == null) return;
 
-        if (animator != null && HasTrigger(attackTrigger)) animator.SetTrigger(attackTrigger);
+        if (animator != null && HasTrigger(attackTrigger)) SetTriggerSync(attackTrigger);
+        PlayAttackWindupSfx();
 
         float radius = Mathf.Max(0.8f, enemyData.attackRange);
         Vector3 center = transform.position + transform.forward * (enemyData.attackRange * 0.5f);
+        PlayAttackImpactSfx();
         var cols = Physics.OverlapSphere(center, radius, LayerMask.GetMask("Player"));
         foreach (var c in cols)
         {
             var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null) ps.TakeDamage(enemyData.basicDamage);
+            if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, enemyData.basicDamage);
         }
 
         lastAttackTime = Time.time;
@@ -126,8 +123,8 @@ public class BadDiwataPunsoAI : BaseEnemyAI
 
     private IEnumerator CoRoots()
     {
-        if (animator != null && HasTrigger(rootsTrigger)) animator.SetTrigger(rootsTrigger);
-        if (audioSource != null && rootsSFX != null) audioSource.PlayOneShot(rootsSFX);
+        if (animator != null && HasTrigger(rootsTrigger)) SetTriggerSync(rootsTrigger);
+        PlaySfx(rootsSFX);
         if (rootsVFX != null) Instantiate(rootsVFX, transform.position, transform.rotation);
 
         yield return new WaitForSeconds(rootsWindup);
@@ -138,7 +135,7 @@ public class BadDiwataPunsoAI : BaseEnemyAI
             if (hit.CompareTag("Player"))
             {
                 var playerStats = hit.GetComponent<PlayerStats>();
-                if (playerStats != null) playerStats.TakeDamage(rootsDamage);
+                if (playerStats != null) DamageRelay.ApplyToPlayer(playerStats.gameObject, rootsDamage);
             }
         }
     }
@@ -164,8 +161,8 @@ public class BadDiwataPunsoAI : BaseEnemyAI
 
     private IEnumerator CoNatureBolt()
     {
-        if (animator != null && HasTrigger(natureBoltTrigger)) animator.SetTrigger(natureBoltTrigger);
-        if (audioSource != null && natureBoltSFX != null) audioSource.PlayOneShot(natureBoltSFX);
+        if (animator != null && HasTrigger(natureBoltTrigger)) SetTriggerSync(natureBoltTrigger);
+        PlaySfx(natureBoltSFX);
         if (natureBoltVFX != null) Instantiate(natureBoltVFX, transform.position, transform.rotation);
 
         yield return new WaitForSeconds(natureBoltWindup);
@@ -178,7 +175,7 @@ public class BadDiwataPunsoAI : BaseEnemyAI
             if (distance <= natureBoltProjectileSpeed * 2f)
             {
                 var playerStats = target.GetComponent<PlayerStats>();
-                if (playerStats != null) playerStats.TakeDamage(natureBoltDamage);
+        if (playerStats != null) DamageRelay.ApplyToPlayer(playerStats.gameObject, natureBoltDamage);
             }
         }
     }

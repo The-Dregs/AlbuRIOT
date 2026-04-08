@@ -26,6 +26,8 @@ public class QuestHUD : MonoBehaviour
     [Header("Behavior")] 
     [Tooltip("Hide the HUD while the Quest List (T) panel is open.")]
     public bool hideWhileQuestListOpen = true;
+    [Tooltip("Hide the HUD while the Pause Menu is open.")]
+    public bool hideWhilePauseMenuOpen = true;
 
     private QuestManager qm;
 
@@ -153,20 +155,18 @@ public class QuestHUD : MonoBehaviour
         var q = GetActiveQuest();
         if (q == null || q.isCompleted)
         {
-            hudText.text = string.Empty;
-            return;
+        hudText.text = string.Empty;
+        return;
         }
-
-        string progress = FormatProgress(q);
-        hudText.text = $"<b>{q.questName}</b>  <size=80%>{progress}</size>";
     }
 
     private void RefreshVisibilityOnly()
     {
         if (hudText == null) return;
         bool listOpen = hideWhileQuestListOpen && LocalUIManager.Instance != null && LocalUIManager.Instance.IsOwner("QuestList");
+        bool pauseOpen = hideWhilePauseMenuOpen && LocalUIManager.Instance != null && LocalUIManager.Instance.IsOwner("PauseMenu");
         bool hasActive = HasActiveQuest();
-        hudText.gameObject.SetActive(!listOpen && hasActive);
+        hudText.gameObject.SetActive(!listOpen && !pauseOpen && hasActive);
     }
 
     private Quest GetActiveQuest()
@@ -187,6 +187,32 @@ public class QuestHUD : MonoBehaviour
     {
         if (q == null) return string.Empty;
         if (q.isCompleted) return "completed";
+
+        // show per-objective detail when available
+        if (q.objectives != null && q.objectives.Length > 0)
+        {
+            var obj = q.GetCurrentObjective();
+            if (obj != null)
+            {
+                bool locallyComplete = obj.IsMultiItemCollect() ? obj.IsMultiItemCollectComplete() : obj.IsCompleted;
+                bool isMultiplayerWaiting = locallyComplete
+                    && Photon.Pun.PhotonNetwork.IsConnected
+                    && Photon.Pun.PhotonNetwork.InRoom
+                    && (obj.objectiveType == ObjectiveType.Collect || obj.objectiveType == ObjectiveType.TalkTo);
+
+                if (isMultiplayerWaiting)
+                    return $"{obj.objectiveName}     Complete";
+                else if (locallyComplete)
+                    return $"{obj.objectiveName}  \u2713";
+                else
+                {
+                    string prog = obj.requiredCount > 1 ? $" [{obj.currentCount}/{obj.requiredCount}]" : "";
+                    return $"{obj.objectiveName}{prog}";
+                }
+            }
+        }
+
+        // legacy
         if (q.requiredCount > 1)
             return $"{Mathf.Clamp(q.currentCount, 0, Mathf.Max(1, q.requiredCount))}/{Mathf.Max(1, q.requiredCount)}";
         return "in progress";

@@ -1,8 +1,22 @@
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using System.Collections.Generic;
+using Photon.Pun;
 
 public class TerrainGenerator : MonoBehaviour
 {
+    public static int LastCompletedGenerationId { get; private set; }
+    public static event System.Action<int> OnGenerationCompleted;
+
+    private static int generationSequence = 0;
+    public bool IsGenerationInProgress { get; private set; }
+    public bool IsGenerationComplete { get; private set; }
+    public int LastGenerationId { get; private set; }
+
+    [Header("Generation Control")]
+    public bool generateOnStart = true;
+    public bool allowManualRegenerate = false; // keep false to block button-based re-gen
+    private bool hasGenerated = false;
     [Header("Terrain Size")]
     public int width = 256;
     public int height = 256;
@@ -11,6 +25,9 @@ public class TerrainGenerator : MonoBehaviour
     [Header("Simple Controls")]
     [Tooltip("0 = random each run")] public int seed = 0;
     [Range(40f, 400f)] public float islandScale = 160f; // feature size – bigger = fewer, larger landmasses
+    [Header("Island Size (shape falloff)")]
+    [Tooltip("Overall island footprint. 1 = fills map, 0.05 = tiny island. Independent of Perlin detail.")]
+    [Range(0.05f, 1f)] public float islandSize = 0.85f;
     [Range(0.25f, 0.85f)] public float targetLandPercent = 0.6f; // desired land coverage
     [Range(0.01f, 0.2f)] public float beachWidth = 0.08f; // thickness of the sand band in normalized height space
     [Range(0f, 1f)] public float mountainAmount = 0.35f; // fraction of land that becomes mountain
@@ -59,15 +76,19 @@ public class TerrainGenerator : MonoBehaviour
     [Range(0f, 1f)] public float grass3Prob = 0.2f;
     [Range(0.01f, 4f)] public float grassNoiseScale = 1.2f; // higher = more variation tiles
 
-    [Header("Object Spawning")]
-    public GameObject[] treePrefabs;
-    public GameObject[] rockPrefabs;
-    [Range(0, 10000)] public int treeCount = 300;
-    [Range(0, 10000)] public int rockCount = 120;
-    [Range(1f, 40f)] public float treeMinSpacing = 6f;
-    [Range(1f, 60f)] public float rockMinSpacing = 8f;
-    [Range(0f, 60f)] public float maxObjectSlope = 28f;
-    [Range(0.01f, 0.4f)] public float minGrassHeight = 0.02f; // minimal height above sand threshold for objects
+    // TerrainGenerator now handles only terrain; resources (trees/rocks/props) are spawned by MapResourcesGenerator
+
+    [Header("Terrain Details (Painted Grass)")]
+    public bool paintTerrainDetails = true;
+    public bool autoCreateDetailPrototypes = true;
+    public Texture2D[] grassDetailTextures; // optional: auto-create from 2D textures
+    [Range(64, 2048)] public int detailResolution = 512;
+    [Range(8, 128)] public int detailResolutionPerPatch = 32;
+    [Range(0f, 1f)] public float detailGrassMinWeight = 0.85f; // require strong grass splat presence
+    [Range(0f, 1f)] public float detailSandMaxWeight = 0.03f;  // exclude sand influence
+    [Range(0f, 60f)] public float detailMaxSlope = 28f;
+    [Range(0.1f, 8f)] public float detailDensity = 1.0f; // global density multiplier
+    [Range(0.1f, 8f)] public float grassyAreaGrassSpawnDensity = 1.5f; // extra slider for visible grass amount on grassy areas
 
     public Terrain terrain;
 
@@ -81,22 +102,106 @@ public class TerrainGenerator : MonoBehaviour
         public float meanHeight; public float stdDevHeight;
         public float mountainFraction; public float meanHeightMountain; public float meanHeightNonMountain;
         public float radialCorrelation; // correlation between height and radial island core factor
+        public float persistence; public float lacunarity; public float hurstExponent;
         public double msHeightCompute; public double msSplatCompute; public double msObjects; public double msDetails; public double msApplyHeight; public double msApplySplat; public double totalMs;
     }
 
     public TerrainMetrics lastMetrics;
 
+    [Header("Debug")]
+    public bool logTerrainMetrics = true;
+
     void Start()
     {
+        if (generateOnStart)
+        {
+            // in multiplayer, only master client generates terrain on start.
+            // joiners must wait for the seed sync RPC from MapResourcesGenerator.
+            if (PhotonNetwork.IsConnected && PhotonNetwork.InRoom && !PhotonNetwork.IsMasterClient)
+            {
+                Debug.Log("[TerrainGenerator] Joiner: waiting for terrain seed from master client.");
+                return;
+            }
+
+            GenerateTerrain();
+        }
+    }
+
+    /// <summary>
+    /// Called by MapResourcesGenerator RPC on joiners to set the master's seed and generate identical terrain.
+    /// </summary>
+    public void GenerateWithSeed(int syncedSeed)
+    {
+        seed = syncedSeed;
+        hasGenerated = false;
+        allowManualRegenerate = true;
+        Debug.Log($"[TerrainGenerator] Joiner generating terrain with master seed {syncedSeed}");
         GenerateTerrain();
+    }
+
+    // No runtime coroutines; MapResourcesGenerator manages resource placement
+
+    // Force regeneration by resetting hasGenerated flag
+    public void ForceRegenerate()
+    {
+        hasGenerated = false;
+        allowManualRegenerate = true;
+        GenerateTerrain();
+    }
+
+    /// <summary>
+    /// finds the correct terrain in the active scene.
+    /// resolves stale/wrong inspector references that could cause grass to paint on the wrong terrain.
+    /// </summary>
+    private void ResolveActiveTerrain()
+    {
+        Scene activeScene = SceneManager.GetActiveScene();
+        if (terrain != null && terrain.gameObject.scene == activeScene && terrain.terrainData != null)
+            return;
+
+        // try same gameobject first
+        terrain = GetComponent<Terrain>();
+        if (terrain != null && terrain.terrainData != null)
+            return;
+
+        // search active scene for any terrain
+        var terrains = FindObjectsByType<Terrain>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+        for (int i = 0; i < terrains.Length; i++)
+        {
+            if (terrains[i] != null && terrains[i].gameObject.scene == activeScene && terrains[i].terrainData != null)
+            {
+                terrain = terrains[i];
+                Debug.Log($"[TerrainGenerator] resolved terrain to '{terrain.name}' in active scene via scene search");
+                return;
+            }
+        }
+
+        // last resort: any terrain with data
+        if (terrains.Length > 0 && terrains[0] != null)
+        {
+            terrain = terrains[0];
+            Debug.LogWarning($"[TerrainGenerator] no terrain found in active scene, falling back to '{terrain.name}'");
+        }
     }
 
     // generate terrain heightmap and paint textures and grass details
     public void GenerateTerrain()
     {
+        if (hasGenerated && !allowManualRegenerate)
+        {
+            Debug.Log("terrain generator: generation skipped (already generated and manual regenerate disabled)");
+            return;
+        }
+
+        IsGenerationInProgress = true;
+        IsGenerationComplete = false;
+        int generationId = ++generationSequence;
+
+        ResolveActiveTerrain();
         var swTotal = System.Diagnostics.Stopwatch.StartNew();
         var sw = new System.Diagnostics.Stopwatch();
         int useSeed = seed != 0 ? seed : Random.Range(int.MinValue, int.MaxValue);
+        if (seed == 0) seed = useSeed; // lock in for future runs
         System.Random prng = new System.Random(useSeed);
         float offX = prng.Next(-100000, 100000);
         float offY = prng.Next(-100000, 100000);
@@ -104,7 +209,10 @@ public class TerrainGenerator : MonoBehaviour
         float[,] finalHeightMap = new float[width, height];
         int landBlocks = 0;
         int sandBlocks = 0;
-        double sumH = 0.0; double sumH2 = 0.0;
+        // Height statistics (Formulas 9.0/9.1) computed over the final noise-space height field.
+        // We compute these after smoothing so they reflect the evaluated terrain signal.
+        double sumH = 0.0;
+        double sumH2 = 0.0;
         // Precompute simple octaves based on roughness
         int baseOctaves = Mathf.RoundToInt(Mathf.Lerp(2, 5, Mathf.Clamp01(roughness)));
         float persistence = Mathf.Lerp(0.35f, 0.6f, Mathf.Clamp01(roughness));
@@ -114,7 +222,7 @@ public class TerrainGenerator : MonoBehaviour
         // derive falloff sharpness from centerBias to avoid harsh edges
         float aFall = Mathf.Lerp(0.9f, 1.8f, Mathf.Clamp01(centerBias));
         float bFall = Mathf.Lerp(1.4f, 2.6f, Mathf.Clamp01(centerBias));
-        float[,] falloffMap = GenerateFalloffMap(width, height, aFall, bFall, circularFalloff);
+        float[,] falloffMap = GenerateFalloffMap(width, height, aFall, bFall, circularFalloff, islandSize);
 
         sw.Restart();
         // First pass: create a continuous height field
@@ -127,10 +235,14 @@ public class TerrainGenerator : MonoBehaviour
                 float baseNoise = FractalNoise(nx, ny, baseOctaves, persistence, lacunarity);
                 // Apply falloff more aggressively - scale it by centerBias but ensure it affects edges
                 float rawFall = falloffMap[x, y];
-                // Remap falloff to start later and be steeper
+                // Remap falloff to start later and be steeper (edge softening)
                 float remappedFall = Mathf.Max(0f, (rawFall - falloffStartDistance) / (1f - falloffStartDistance));
                 remappedFall = Mathf.Pow(remappedFall, 1f / Mathf.Max(0.1f, falloffSteepness));
-                float fall = remappedFall * Mathf.Clamp01(centerBias);
+                // Island-size mask is baked into falloffMap; enforce it independent of centerBias
+                float islandMask = rawFall; // 0 center .. 1 edges, already scaled by islandSize
+                islandMask = Mathf.Clamp01(islandMask);
+                // Combine: hard island boundary + optional center bias softening
+                float fall = Mathf.Max(islandMask, remappedFall * Mathf.Clamp01(centerBias));
                 float h = Mathf.Clamp01(baseNoise - fall);
                 // pre-smooth the primary height signal to avoid harsh terraces
                 h = Mathf.SmoothStep(0f, 1f, h);
@@ -155,6 +267,20 @@ public class TerrainGenerator : MonoBehaviour
             SmoothHeightsInPlace(finalHeightMap, width, height, Mathf.Clamp(smoothIterations, 3, 10));
             // relax edges where falloff is high to guarantee a wide shoreline ramp
             EdgeRelax(finalHeightMap, falloffMap, width, height, 0.45f, 5, Mathf.Clamp01(smoothnessStrength * 0.95f));
+        }
+
+        // Compute height summary stats over the smoothed noise-space map.
+        // meanHeight = sum(h)/(W*H), stdDevHeight = sqrt(max(0, sum(h^2)/(W*H) - mean^2))
+        sumH = 0.0;
+        sumH2 = 0.0;
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                double hv = finalHeightMap[x, y];
+                sumH += hv;
+                sumH2 += hv * hv;
+            }
         }
 
         // Auto-threshold to hit target land percent; compute classification threshold in height space
@@ -239,27 +365,27 @@ public class TerrainGenerator : MonoBehaviour
                         float mountainX = (x + offX * 0.31f) / (Mathf.Max(20f, mountainScale));
                         float mountainY = (y + offY * 0.31f) / (Mathf.Max(20f, mountainScale));
                         float mountainNoise = FractalNoise(mountainX, mountainY, 5, 0.6f, 2.3f);
-                        
+
                         // Second layer - hills with smaller scale for detail
                         float hillX = (x + offX * 0.47f) / (Mathf.Max(10f, hillScale));
                         float hillY = (y + offY * 0.47f) / (Mathf.Max(10f, hillScale));
                         float hillNoise = FractalNoise(hillX, hillY, 4, 0.55f, 2.2f);
-                        
+
                         // Create mountain peaks that vary by height - stronger in higher areas
                         float mountainMask = Mathf.SmoothStep(0.3f, 0.85f, t); // stronger mountains in high areas
-                        
+
                         // Base mountain elevation
                         float mountainElevation = (mountainNoise - 0.3f) * mountainMask; // bias toward positive
                         mountainElevation = Mathf.Max(0f, mountainElevation); // only add, don't subtract
                         mountainElevation *= mountainIntensity * maxMountainHeight;
-                        
+
                         // Layer hills on top - scaled relative to mountain height for natural variation
                         float hillMask = mountainMask * Mathf.Clamp01(hillIntensity);
                         float hillElevation = (hillNoise - 0.2f) * hillMask; // hills can add detail
                         hillElevation = Mathf.Max(0f, hillElevation);
                         // Hills scale with mountain elevation - create peaks and valleys
                         hillElevation *= maxMountainHeight * 0.4f * hillIntensity;
-                        
+
                         // Combine both layers
                         heightNorm += mountainElevation + hillElevation;
                     }
@@ -268,14 +394,14 @@ public class TerrainGenerator : MonoBehaviour
                 // Enforce a world-edge ramp using the falloff map (prevents cliffs regardless of noise)
                 // fall=0 center, 1 at edges. Blend targetEdge curve as fall approaches 1
                 float fall = edgeFactor;
-                
+
                 // Remap falloff to start earlier and transition more smoothly to underwater
                 float remappedFall = Mathf.Max(0f, (fall - falloffStartDistance) / (1f - falloffStartDistance));
                 remappedFall = Mathf.Pow(remappedFall, 1f / Mathf.Max(0.1f, falloffSteepness));
-                
+
                 // Start blending earlier for smoother transition
                 float rampT = Mathf.SmoothStep(falloffStartDistance * 0.8f, 0.99f, fall);
-                
+
                 // Calculate target height at this falloff distance
                 // Near center (fall < falloffStartDistance): keep original height
                 // At edges (fall = 1): go to underwaterDepth
@@ -283,7 +409,7 @@ public class TerrainGenerator : MonoBehaviour
                 float edgeProgression = Mathf.SmoothStep(0f, 1f, remappedFall);
                 float intermediateHeight = Mathf.Lerp(shorelineLow, underwaterDepth, edgeProgression * 0.7f); // transition zone
                 float targetEdge = Mathf.Lerp(intermediateHeight, underwaterDepth, edgeProgression * edgeProgression); // stronger pull at edges
-                
+
                 // Blend more strongly as we approach edges
                 float blendStrength = Mathf.SmoothStep(0f, 1f, remappedFall);
                 heightNorm = Mathf.Lerp(heightNorm, targetEdge, blendStrength * rampT);
@@ -297,20 +423,20 @@ public class TerrainGenerator : MonoBehaviour
         AdaptiveLowlandSmoothing(physical, width, height, Mathf.Max(shorelineHigh + 0.02f, grassStart + 0.04f), 10, Mathf.Clamp01(smoothnessStrength));
         // ensure continuity exactly around elevation control thresholds regardless of values
         IsocontourSmoothing(physical, finalHeightMap, width, height, sandThreshold, grassStart, beachWidth * 1.35f, 4);
-        
+
         // Normalize heights to [0,1] for Unity terrain, preserving mountain variations
         float maxHeight = 0f;
         for (int y = 0; y < height; y++)
             for (int x = 0; x < width; x++)
                 maxHeight = Mathf.Max(maxHeight, physical[x, y]);
-        
+
         if (maxHeight > 0.0001f)
         {
             for (int y = 0; y < height; y++)
                 for (int x = 0; x < width; x++)
                     physical[x, y] = physical[x, y] / maxHeight;
         }
-        
+
         // Final smoothing pass after normalization to eliminate any stepped artifacts
         // This is critical for smooth terrain, especially with high heightMultiplier
         if (finalSmoothPasses > 0)
@@ -319,8 +445,10 @@ public class TerrainGenerator : MonoBehaviour
             // Additional gentle pass for ultra-smooth transitions
             AdaptiveLowlandSmoothing(physical, width, height, 1.0f, 2, 0.4f); // smooth everywhere gently
         }
-        
+
         terrainData.SetHeights(0, 0, physical);
+        // Ensure height changes are fully applied before sampling for object placement
+        if (terrain != null) terrain.Flush();
         sw.Stop();
         double msApplyHeight = sw.Elapsed.TotalMilliseconds;
         int totalBlocks = width * height;
@@ -331,7 +459,7 @@ public class TerrainGenerator : MonoBehaviour
 
         sw.Restart();
         float[,,] splatmap = new float[width, width, 4];
-        
+
         for (int y = 0; y < width; y++)
         {
             for (int x = 0; x < width; x++)
@@ -339,7 +467,7 @@ public class TerrainGenerator : MonoBehaviour
                 // Use physical height for texture assignment (not noise value)
                 float physicalH = physical[x, y];
                 float[] weights = new float[4];
-                
+
                 if (physicalH < sandPhysicalThreshold)
                 {
                     weights[0] = 1f; // sand below threshold
@@ -376,7 +504,8 @@ public class TerrainGenerator : MonoBehaviour
                     float p3 = Mathf.Clamp01(grass3Prob * 0.6f);
                     float sumP = Mathf.Max(0.0001f, p1 + p2 + p3);
                     if (rocky) { weights[3] = 1f; }
-                    else {
+                    else
+                    {
                         float gnx = (x + offX * 0.71f) / (islandScale * Mathf.Max(0.15f, grassNoiseScale));
                         float gny = (y + offY * 0.71f) / (islandScale * Mathf.Max(0.15f, grassNoiseScale));
                         float r = FractalNoise(gnx, gny, 2, 0.55f, 2.15f) * sumP;
@@ -390,7 +519,123 @@ public class TerrainGenerator : MonoBehaviour
         }
         sw.Stop(); double msSplatCompute = sw.Elapsed.TotalMilliseconds;
         sw.Restart(); terrainData.SetAlphamaps(0, 0, splatmap); sw.Stop(); double msApplySplat = sw.Elapsed.TotalMilliseconds;
+        // Ensure splat changes are applied too before object placement
+        if (terrain != null) terrain.Flush();
         double msObjects = 0.0;
+
+        // Paint Unity terrain details (ONLY on grass areas)
+        if (paintTerrainDetails)
+        {
+            // Optionally auto-create DetailPrototypes from provided 2D textures
+            if (autoCreateDetailPrototypes && grassDetailTextures != null && grassDetailTextures.Length > 0)
+            {
+                var list = new System.Collections.Generic.List<DetailPrototype>();
+                foreach (var tex in grassDetailTextures)
+                {
+                    if (tex == null) continue;
+                    var dp = new DetailPrototype
+                    {
+                        usePrototypeMesh = false,
+                        renderMode = DetailRenderMode.GrassBillboard,
+                        prototypeTexture = tex,
+                        healthyColor = new Color(0.85f, 0.95f, 0.85f, 1f),
+                        dryColor = new Color(0.75f, 0.7f, 0.55f, 1f),
+                        minWidth = 0.6f,
+                        maxWidth = 1.2f,
+                        minHeight = 0.8f,
+                        maxHeight = 1.6f,
+                        noiseSpread = 0.4f,
+                        bendFactor = 0.3f,
+                    };
+                    list.Add(dp);
+                }
+                if (list.Count > 0)
+                {
+                    terrainData.detailPrototypes = list.ToArray();
+                    int res = Mathf.Clamp(detailResolution, 64, 1024); // cap to avoid huge allocations
+                    int perPatch = Mathf.Clamp(detailResolutionPerPatch, 8, 128);
+                    terrainData.SetDetailResolution(res, perPatch);
+                }
+            }
+
+            var prototypes = terrainData.detailPrototypes;
+            if (prototypes != null && prototypes.Length > 0)
+            {
+                int dRes = Mathf.Clamp(terrainData.detailResolution, 64, 1024);
+                int perPatchMax = Mathf.Clamp(detailResolutionPerPatch, 8, 128);
+                int layerCount = prototypes.Length;
+                // Build per-layer int maps
+                var detailLayers = new int[layerCount][,];
+                for (int l = 0; l < layerCount; l++) detailLayers[l] = new int[dRes, dRes];
+
+                for (int y = 0; y < dRes; y++)
+                {
+                    float ny = y / Mathf.Max(1f, (float)(dRes - 1));
+                    for (int x = 0; x < dRes; x++)
+                    {
+                        float nx = x / Mathf.Max(1f, (float)(dRes - 1));
+                        // map to alpha/splat resolution
+                        int sW = splatmap.GetLength(0); int sH = splatmap.GetLength(1);
+                        int sx = Mathf.Clamp(Mathf.RoundToInt(nx * (sW - 1)), 0, sW - 1);
+                        int sy = Mathf.Clamp(Mathf.RoundToInt(ny * (sH - 1)), 0, sH - 1);
+
+                        float sandW = splatmap[sx, sy, 0];
+                        float g1 = splatmap[sx, sy, 1]; float g2 = splatmap[sx, sy, 2]; float g3 = splatmap[sx, sy, 3];
+                        float grassW = g1 + g2 + g3;
+
+                        // Old logic required grassW >= detailGrassMinWeight, which could leave visible
+                        // holes in areas visually painted as grass due to small amounts of sand/rock.
+                        // New logic: treat any cell where a grass layer is the dominant splat as "grass area"
+                        // and then modulate density by grassW and the existing sliders.
+                        int dominantIndex = 0;
+                        float dominantWeight = sandW;
+                        if (g1 > dominantWeight) { dominantWeight = g1; dominantIndex = 1; }
+                        if (g2 > dominantWeight) { dominantWeight = g2; dominantIndex = 2; }
+                        if (g3 > dominantWeight) { dominantWeight = g3; dominantIndex = 3; }
+
+                        bool dominantIsGrass = dominantIndex != 0 && grassW > 0.05f;
+                        bool mostlySand = sandW > detailSandMaxWeight && sandW >= grassW;
+
+                        if (dominantIsGrass && !mostlySand)
+                        {
+                            // Height and slope checks
+                            float hNorm = terrainData.GetInterpolatedHeight(nx, ny) / Mathf.Max(0.0001f, terrainData.size.y);
+                            if (hNorm >= sandHeightThreshold + 0.02f)
+                            {
+                                float slope = terrainData.GetSteepness(nx, ny);
+                                if (slope <= detailMaxSlope)
+                                {
+                                    // Distribute across all prototypes; scale by per-patch capacity and grass weight.
+                                    // Ensure every grass texel gets at least 1 blade to avoid visible "bald" patches.
+                                    for (int l = 0; l < layerCount; l++)
+                                    {
+                                        // Terrain detail values are ints; range ~0..perPatchMax
+                                        float jitter = Mathf.PerlinNoise(nx * 64f + l * 7.1f, ny * 64f + l * 3.3f); // 0..1
+                                        float grassFactor = Mathf.Lerp(0.6f, 1f, Mathf.Clamp01(grassW)); // keep density high on any grass texel
+                                        float densityFactor = detailDensity * grassyAreaGrassSpawnDensity;
+                                        float baseVal = perPatchMax * densityFactor * (0.4f + 0.6f * jitter) * grassFactor;
+                                        int val = Mathf.Max(1, Mathf.RoundToInt(baseVal));
+                                        detailLayers[l][y, x] = Mathf.Clamp(val, 0, perPatchMax);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Apply layers
+                for (int l = 0; l < layerCount; l++)
+                {
+                    terrainData.SetDetailLayer(0, 0, l, detailLayers[l]);
+                }
+                // flush detail changes so they're visible immediately
+                if (terrain != null) terrain.Flush();
+            }
+            else
+            {
+                Debug.Log("terrain generator: no DetailPrototypes found; skipping detail painting.");
+            }
+        }
 
         // disable terrain tree/rock prototypes and instances to avoid collider creation and native crashes
         // this clears any existing prototypes/instances and skips placement entirely
@@ -399,75 +644,7 @@ public class TerrainGenerator : MonoBehaviour
         terrainData.treeInstances = System.Array.Empty<TreeInstance>();
         sw.Stop(); msObjects = sw.Elapsed.TotalMilliseconds;
 
-        // GameObject-based tree/rock placement (safer than Terrain trees; supports any prefab)
-        var terrainRoot = terrain.transform;
-        Transform treesRoot = terrainRoot.Find("_Trees"); if (treesRoot == null) { var go = new GameObject("_Trees"); go.transform.SetParent(terrainRoot, false); treesRoot = go.transform; }
-        Transform rocksRoot = terrainRoot.Find("_Rocks"); if (rocksRoot == null) { var go = new GameObject("_Rocks"); go.transform.SetParent(terrainRoot, false); rocksRoot = go.transform; }
-        // clear previous
-        for (int i = treesRoot.childCount - 1; i >= 0; i--) DestroyImmediate(treesRoot.GetChild(i).gameObject);
-        for (int i = rocksRoot.childCount - 1; i >= 0; i--) DestroyImmediate(rocksRoot.GetChild(i).gameObject);
-
-        // sampling helper
-        bool IsValidObjectSpot(int px, int py)
-        {
-            // Use physical height to determine if spot is above sand level
-            float physicalH = physical[px, py];
-            if (physicalH < sandPhysicalThreshold + (minGrassHeight * 0.5f)) return false; // avoid sand/shore
-            float nx2 = px / (float)width; float ny2 = py / (float)height;
-            float slope = terrainData.GetSteepness(nx2, ny2);
-            if (slope > maxObjectSlope) return false;
-            // must be on grass (sum of grass layers sufficiently large)
-            float sandW = splatmap[px, py, 0];
-            float g1 = splatmap[px, py, 1]; float g2 = splatmap[px, py, 2]; float g3 = splatmap[px, py, 3];
-            if (sandW > 0.05f) return false; // not on sand
-            if (g1 + g2 + g3 < 0.6f) return false;
-            return true;
-        }
-
-        // Place with simple rejection sampling + spacing in world space
-        Vector3 tSize = terrainData.size;
-        System.Random objRng = new System.Random(useSeed + 777);
-        List<Vector3> placedTrees = new List<Vector3>(treeCount);
-        List<Vector3> placedRocks = new List<Vector3>(rockCount);
-
-        if (treePrefabs != null && treePrefabs.Length > 0 && treeCount > 0)
-        {
-            int attempts = 0, maxAttempts = treeCount * 60;
-            while (placedTrees.Count < treeCount && attempts < maxAttempts)
-            {
-                attempts++;
-                int px = objRng.Next(0, width);
-                int py = objRng.Next(0, height);
-                if (!IsValidObjectSpot(px, py)) continue;
-                Vector3 world = new Vector3(px / (float)width * tSize.x, 0f, py / (float)height * tSize.z) + terrainRoot.position;
-                world.y = terrain.SampleHeight(world) + terrainRoot.position.y;
-                bool tooClose = false; foreach (var p in placedTrees) { if ((p - world).sqrMagnitude < treeMinSpacing * treeMinSpacing) { tooClose = true; break; } }
-                if (tooClose) continue;
-                int idx = objRng.Next(0, treePrefabs.Length);
-                var prefab = treePrefabs[idx]; if (prefab == null) continue;
-                var go = Instantiate(prefab, world, Quaternion.Euler(0f, (float)objRng.NextDouble() * 360f, 0f), treesRoot);
-                placedTrees.Add(world);
-            }
-        }
-        if (rockPrefabs != null && rockPrefabs.Length > 0 && rockCount > 0)
-        {
-            int attempts = 0, maxAttempts = rockCount * 60;
-            while (placedRocks.Count < rockCount && attempts < maxAttempts)
-            {
-                attempts++;
-                int px = objRng.Next(0, width);
-                int py = objRng.Next(0, height);
-                if (!IsValidObjectSpot(px, py)) continue;
-                Vector3 world = new Vector3(px / (float)width * tSize.x, 0f, py / (float)height * tSize.z) + terrainRoot.position;
-                world.y = terrain.SampleHeight(world) + terrainRoot.position.y;
-                bool tooClose = false; foreach (var p in placedRocks) { if ((p - world).sqrMagnitude < rockMinSpacing * rockMinSpacing) { tooClose = true; break; } }
-                if (tooClose) continue;
-                int idx = objRng.Next(0, rockPrefabs.Length);
-                var prefab = rockPrefabs[idx]; if (prefab == null) continue;
-                var go = Instantiate(prefab, world, Quaternion.Euler(0f, (float)objRng.NextDouble() * 360f, 0f), rocksRoot);
-                placedRocks.Add(world);
-            }
-        }
+        // Resource placement is handled by MapResourcesGenerator after terrain is ready
 
 
         swTotal.Stop();
@@ -493,7 +670,7 @@ public class TerrainGenerator : MonoBehaviour
         float meanNonMount = 0f;
 
         // radial correlation between height and island-core factor r (1 at center -> 0 at border)
-        double sumX=0, sumY=0, sumXX=0, sumYY=0, sumXY=0; int n=0;
+        double sumX = 0, sumY = 0, sumXX = 0, sumYY = 0, sumXY = 0; int n = 0;
         for (int y = 0; y < height; y++)
         {
             for (int x = 0; x < width; x++)
@@ -503,21 +680,38 @@ public class TerrainGenerator : MonoBehaviour
                 float rCore = 1f - Mathf.Max(Mathf.Abs(nx2), Mathf.Abs(ny2)); // 1 center .. 0 edges
                 float hv = finalHeightMap[x, y];
                 double X = rCore; double Y = hv;
-                sumX += X; sumY += Y; sumXX += X*X; sumYY += Y*Y; sumXY += X*Y; n++;
+                sumX += X; sumY += Y; sumXX += X * X; sumYY += Y * Y; sumXY += X * Y; n++;
             }
         }
-        double denom = System.Math.Sqrt(System.Math.Max(1e-6, (n*sumXX - sumX*sumX) * (n*sumYY - sumY*sumY)));
-        float corr = denom > 0 ? (float)((n*sumXY - sumX*sumY) / denom) : 0f;
+        double denom = System.Math.Sqrt(System.Math.Max(1e-6, (n * sumXX - sumX * sumX) * (n * sumYY - sumY * sumY)));
+        float corr = denom > 0 ? (float)((n * sumXY - sumX * sumY) / denom) : 0f;
+
+        // Hurst exponent from current fBM parameters (Formula 10.0 in TESTING.md)
+        float hurst = 0f;
+        if (persistence > 0f && lacunarity > 0f && persistence != 1f && lacunarity != 1f)
+        {
+            hurst = -Mathf.Log(persistence) / Mathf.Log(lacunarity);
+        }
 
         lastMetrics = new TerrainMetrics
         {
             seed = seed,
-            width = width, height = height,
-            landBlocks = landBlocks, sandBlocks = sandBlocks, totalBlocks = totalBlocks,
-            landPercent = landPercent, sandPercent = sandPercent,
-            meanHeight = (float)mean, stdDevHeight = stdDev,
-            mountainFraction = mountainFraction, meanHeightMountain = meanMount, meanHeightNonMountain = meanNonMount,
+            width = width,
+            height = height,
+            landBlocks = landBlocks,
+            sandBlocks = sandBlocks,
+            totalBlocks = totalBlocks,
+            landPercent = landPercent,
+            sandPercent = sandPercent,
+            meanHeight = (float)mean,
+            stdDevHeight = stdDev,
+            mountainFraction = mountainFraction,
+            meanHeightMountain = meanMount,
+            meanHeightNonMountain = meanNonMount,
             radialCorrelation = corr,
+            persistence = persistence,
+            lacunarity = lacunarity,
+            hurstExponent = hurst,
             msHeightCompute = msCompute,
             msSplatCompute = msSplatCompute,
             msObjects = msObjects,
@@ -526,7 +720,17 @@ public class TerrainGenerator : MonoBehaviour
             totalMs = swTotal.Elapsed.TotalMilliseconds
         };
 
-        Debug.Log($"terrain metrics: total {lastMetrics.totalMs:F1}ms | height {lastMetrics.msHeightCompute:F1}ms + apply {lastMetrics.msApplyHeight:F1}ms | splat {lastMetrics.msSplatCompute:F1}ms + apply {lastMetrics.msApplySplat:F1}ms | objects {lastMetrics.msObjects:F1}ms | details {lastMetrics.msDetails:F1}ms | land {lastMetrics.landPercent:P1} sand {lastMetrics.sandPercent:P1} corr {lastMetrics.radialCorrelation:F2}");
+        if (logTerrainMetrics)
+        {
+            Debug.Log($"terrain metrics: total {lastMetrics.totalMs:F1}ms | height {lastMetrics.msHeightCompute:F1}ms + apply {lastMetrics.msApplyHeight:F1}ms | splat {lastMetrics.msSplatCompute:F1}ms + apply {lastMetrics.msApplySplat:F1}ms | objects {lastMetrics.msObjects:F1}ms | details {lastMetrics.msDetails:F1}ms | land {lastMetrics.landPercent:P1} sand {lastMetrics.sandPercent:P1} corr {lastMetrics.radialCorrelation:F2}");
+        }
+
+        LastGenerationId = generationId;
+        LastCompletedGenerationId = generationId;
+        IsGenerationInProgress = false;
+        IsGenerationComplete = true;
+        OnGenerationCompleted?.Invoke(generationId);
+        hasGenerated = true;
     }
 
     // Helper: compute threshold for desired land % over [0..1] height map
@@ -557,7 +761,7 @@ public class TerrainGenerator : MonoBehaviour
     {
         float[,] temp = new float[w, h];
         float smoothWeight = Mathf.Clamp01(smoothnessStrength);
-        
+
         for (int it = 0; it < iterations; it++)
         {
             // horizontal pass (kernel [1,4,6,4,1]/16) - wider kernel for better smoothing
@@ -571,7 +775,7 @@ public class TerrainGenerator : MonoBehaviour
                     float c1 = map[Mathf.Min(w - 1, x + 1), y];
                     float c2 = map[Mathf.Min(w - 1, x + 2), y];
                     float smoothed = (a2 + 4f * a1 + 6f * b0 + 4f * c1 + c2) / 16f;
-                    
+
                     // Use full smoothWeight for stronger smoothing, especially on later iterations
                     float weight = it < iterations - 1 ? smoothWeight : Mathf.Min(1f, smoothWeight * 1.1f);
                     temp[x, y] = Mathf.Lerp(b0, smoothed, weight);
@@ -588,7 +792,7 @@ public class TerrainGenerator : MonoBehaviour
                     float c1 = temp[x, Mathf.Min(h - 1, y + 1)];
                     float c2 = temp[x, Mathf.Min(h - 1, y + 2)];
                     float smoothed = (a2 + 4f * a1 + 6f * b0 + 4f * c1 + c2) / 16f;
-                    
+
                     // Use full smoothWeight for stronger smoothing, especially on later iterations
                     float weight = it < iterations - 1 ? smoothWeight : Mathf.Min(1f, smoothWeight * 1.1f);
                     map[x, y] = Mathf.Lerp(b0, smoothed, weight);
@@ -729,39 +933,49 @@ public class TerrainGenerator : MonoBehaviour
     }
 
     // generates a falloff map to create island shapes (circular with trimmed corners)
-    float[,] GenerateFalloffMap(int width, int height, float a, float b, float circularity)
+    float[,] GenerateFalloffMap(int width, int height, float a, float b, float circularity, float islandSizeParam)
     {
         float[,] map = new float[width, height];
         circularity = Mathf.Clamp01(circularity);
-        
+        float innerRadius = Mathf.Clamp01(islandSizeParam); // larger value = larger island footprint
+
         for (int y = 0; y < height; y++)
         {
             for (int x = 0; x < width; x++)
             {
                 float nx = x / (float)width * 2 - 1;
                 float ny = y / (float)height * 2 - 1;
-                
+
                 // Calculate both square (Chebyshev) and circular (Euclidean) distances
                 float squareDist = Mathf.Max(Mathf.Abs(nx), Mathf.Abs(ny)); // creates square/diamond
                 float circularDist = Mathf.Sqrt(nx * nx + ny * ny) / Mathf.Sqrt(2f); // normalized circular
-                
+
                 // Blend between square and circular based on circularity parameter
                 // Higher circularity = more circular, trims corners
                 float value = Mathf.Lerp(squareDist, circularDist, circularity);
-                
+
+                // Apply an island footprint scale that does NOT affect the noise detail.
+                // We remap distance so that everything inside 'innerRadius' is treated as 0 falloff,
+                // and then ramp to 1 as we approach the border. This simply shrinks/expands the island.
+                float distRemap = 0f;
+                if (innerRadius <= 0.0001f) distRemap = value;
+                else distRemap = Mathf.Clamp01((value - innerRadius) / Mathf.Max(1e-5f, 1f - innerRadius));
+
                 // Apply falloff curve - make it more aggressive near edges
-                float falloff = Mathf.Pow(value, a) / (Mathf.Pow(value, a) + Mathf.Pow(b - b * value, a));
-                
+                float falloff = Mathf.Pow(distRemap, a) / (Mathf.Pow(distRemap, a) + Mathf.Pow(b - b * distRemap, a));
+
                 // Boost falloff near the edges to ensure proper trimming
                 if (falloff > 0.5f)
                 {
                     float edgeBoost = Mathf.SmoothStep(0.5f, 1f, falloff);
                     falloff = Mathf.Lerp(falloff, 1f, edgeBoost * 0.3f); // boost edges by up to 30%
                 }
-                
+
                 map[x, y] = Mathf.Clamp01(falloff);
             }
         }
         return map;
     }
+
+    // No object placement here; MapResourcesGenerator handles all props/resources
 }

@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemName: Aloe Vera
   description: A medicinal plant.
-  icon: {fileID: 0}
+  icon: {fileID: 21300000, guid: 49ff873ee0a958a4d842d3daa9ba3da9, type: 3}
   itemType: 0
   maxStack: 10
   healthModifier: 0

@@ -14,14 +14,23 @@ public class EnemyManager : MonoBehaviourPun
     [Header("Enemy Prefabs")]
     public GameObject[] enemyPrefabs;
     
+    [Header("Day/Night Spawning")]
+    [Tooltip("Only spawn enemies during night phase")]
+    public bool respectDayNightCycle = true;
+    [Tooltip("Spawn multiplier during night (1.0 = normal, 2.0 = double)")]
+    public float nightSpawnMultiplier = 1.5f;
+    
     [Header("Debug")]
     public bool showDebugInfo = false;
     public bool enableSpawning = true;
+    [SerializeField, Range(0.1f, 5f)] private float debugLogInterval = 1f;
     
     // Runtime data
     private List<BaseEnemyAI> activeEnemies = new List<BaseEnemyAI>();
     private float lastSpawnTime;
     private Dictionary<string, GameObject> enemyPrefabLookup = new Dictionary<string, GameObject>();
+    private ChapterGameplayLoop cachedChapterLoop;
+    private float nextDebugLogTime;
     
     // Events
     public System.Action<BaseEnemyAI> OnEnemySpawned;
@@ -38,9 +47,10 @@ public class EnemyManager : MonoBehaviourPun
     
     void Update()
     {
-        if (showDebugInfo)
+        if (showDebugInfo && Time.time >= nextDebugLogTime)
         {
             Debug.Log($"[EnemyManager] Active Enemies: {activeEnemies.Count}");
+            nextDebugLogTime = Time.time + Mathf.Max(0.1f, debugLogInterval);
         }
     }
     
@@ -87,16 +97,36 @@ public class EnemyManager : MonoBehaviourPun
     {
         if (!enableSpawning) return;
         
+        if (respectDayNightCycle && DayNightCycleManager.Instance != null)
+        {
+            if (!DayNightCycleManager.Instance.IsNight())
+            {
+                if (showDebugInfo)
+                {
+                    Debug.Log($"[EnemyManager] Cannot spawn {enemyPrefab.name} - it's day time!");
+                }
+                return;
+            }
+        }
+        
         GameObject enemyInstance = null;
         
         if (PhotonNetwork.IsConnected && !PhotonNetwork.OfflineMode)
         {
-            // Network spawn
-            enemyInstance = PhotonNetwork.Instantiate(enemyPrefab.name, position, rotation);
+            string resolvedPath = ResolvePhotonEnemyPath(enemyPrefab);
+            if (string.IsNullOrWhiteSpace(resolvedPath))
+            {
+                if (showDebugInfo)
+                {
+                    Debug.LogWarning($"[EnemyManager] Could not resolve a Photon Resources path for enemy prefab '{enemyPrefab.name}'.");
+                }
+                return;
+            }
+
+            enemyInstance = PhotonNetwork.Instantiate(resolvedPath, position, rotation);
         }
         else
         {
-            // Local spawn
             enemyInstance = Instantiate(enemyPrefab, position, rotation);
         }
         
@@ -106,8 +136,15 @@ public class EnemyManager : MonoBehaviourPun
             if (enemyAI != null)
             {
                 activeEnemies.Add(enemyAI);
-                // subscribe to this instance's death event
                 enemyAI.OnEnemyDied += HandleEnemyDied;
+                
+                if (cachedChapterLoop == null)
+                    cachedChapterLoop = FindFirstObjectByType<ChapterGameplayLoop>();
+                if (cachedChapterLoop != null)
+                {
+                    cachedChapterLoop.OnEnemySpawned(enemyAI);
+                }
+                
                 OnEnemySpawned?.Invoke(enemyAI);
                 OnEnemyCountChanged?.Invoke(activeEnemies.Count);
                 
@@ -117,6 +154,34 @@ public class EnemyManager : MonoBehaviourPun
                 }
             }
         }
+    }
+
+    private string ResolvePhotonEnemyPath(GameObject enemyPrefab)
+    {
+        if (enemyPrefab == null)
+            return null;
+
+        string prefabName = enemyPrefab.name?.Trim();
+        if (string.IsNullOrWhiteSpace(prefabName))
+            return null;
+
+        string[] candidates;
+        if (prefabName.StartsWith("Enemies/"))
+            candidates = new[] { prefabName, prefabName.Substring("Enemies/".Length) };
+        else
+            candidates = new[] { prefabName, $"Enemies/{prefabName}" };
+
+        for (int i = 0; i < candidates.Length; i++)
+        {
+            string candidate = candidates[i];
+            if (string.IsNullOrWhiteSpace(candidate))
+                continue;
+
+            if (Resources.Load<GameObject>(candidate) != null)
+                return candidate;
+        }
+
+        return null;
     }
     
     public void SpawnEnemyAtRandomPoint(string enemyName)
@@ -175,8 +240,9 @@ public class EnemyManager : MonoBehaviourPun
     
     public void KillAllEnemies()
     {
-        foreach (var enemy in activeEnemies)
+        for (int i = activeEnemies.Count - 1; i >= 0; i--)
         {
+            var enemy = activeEnemies[i];
             if (enemy != null && !enemy.IsDead)
             {
                 enemy.TakeEnemyDamage(enemy.MaxHealth, gameObject);
@@ -214,12 +280,65 @@ public class EnemyManager : MonoBehaviourPun
             activeEnemies.Remove(enemy);
             OnEnemyDied?.Invoke(enemy);
             OnEnemyCountChanged?.Invoke(activeEnemies.Count);
+            NotifyQuestKillProgress(enemy);
             
             if (showDebugInfo)
             {
                 Debug.Log($"[EnemyManager] Enemy {enemy.name} died. Remaining: {activeEnemies.Count}");
             }
         }
+    }
+
+    private void NotifyQuestKillProgress(BaseEnemyAI enemy)
+    {
+        string enemyId = ResolveQuestEnemyId(enemy);
+        if (string.IsNullOrWhiteSpace(enemyId))
+            return;
+
+        PlayerQuestRelay[] relays = FindObjectsByType<PlayerQuestRelay>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+        if (relays == null || relays.Length == 0)
+        {
+            QuestManager questManager = FindFirstObjectByType<QuestManager>();
+            if (questManager != null)
+                questManager.AddProgress_Kill(enemyId);
+            return;
+        }
+
+        bool isNetworkMultiplayer = PhotonNetwork.IsConnected && !PhotonNetwork.OfflineMode && PhotonNetwork.InRoom;
+        for (int i = 0; i < relays.Length; i++)
+        {
+            PlayerQuestRelay relay = relays[i];
+            if (relay == null)
+                continue;
+
+            if (isNetworkMultiplayer && relay.photonView != null)
+            {
+                relay.photonView.RPC(nameof(PlayerQuestRelay.RPC_AddKillProgress), RpcTarget.All, enemyId);
+            }
+            else
+            {
+                relay.RPC_AddKillProgress(enemyId);
+            }
+        }
+    }
+
+    private static string ResolveQuestEnemyId(BaseEnemyAI enemy)
+    {
+        if (enemy != null && enemy.enemyData != null && !string.IsNullOrWhiteSpace(enemy.enemyData.enemyName))
+            return enemy.enemyData.enemyName.Trim();
+
+        if (enemy == null)
+            return string.Empty;
+
+        return SanitizeEnemyName(enemy.name);
+    }
+
+    private static string SanitizeEnemyName(string enemyName)
+    {
+        if (string.IsNullOrWhiteSpace(enemyName))
+            return string.Empty;
+
+        return enemyName.Replace("(Clone)", string.Empty).Trim();
     }
     
     #endregion
@@ -228,6 +347,7 @@ public class EnemyManager : MonoBehaviourPun
     
     public int ActiveEnemyCount => activeEnemies.Count;
     public List<BaseEnemyAI> ActiveEnemies => new List<BaseEnemyAI>(activeEnemies);
+    public IReadOnlyList<BaseEnemyAI> ActiveEnemiesReadonly => activeEnemies;
     
     #endregion
     
@@ -254,14 +374,39 @@ public class EnemyManager : MonoBehaviourPun
     
     void OnDestroy()
     {
-        // Unsubscribe from instance events
-        foreach (var enemy in activeEnemies)
+        // Stop all coroutines
+        StopAllCoroutines();
+        
+        // Unsubscribe from enemy events
+        if (activeEnemies != null)
         {
-            if (enemy != null)
+            for (int i = activeEnemies.Count - 1; i >= 0; i--)
             {
-                enemy.OnEnemyDied -= HandleEnemyDied;
+                var enemy = activeEnemies[i];
+                if (enemy != null)
+                {
+                    try
+                    {
+                        enemy.OnEnemyDied -= HandleEnemyDied;
+                    }
+                    catch (System.Exception)
+                    {
+                        // Enemy already destroyed, ignore
+                    }
+                }
             }
+            activeEnemies.Clear();
         }
+        
+        // Clear collections
+        if (enemyPrefabLookup != null)
+            enemyPrefabLookup.Clear();
+        cachedChapterLoop = null;
+        
+        // Clear event subscriptions
+        OnEnemySpawned = null;
+        OnEnemyDied = null;
+        OnEnemyCountChanged = null;
     }
     
     #endregion

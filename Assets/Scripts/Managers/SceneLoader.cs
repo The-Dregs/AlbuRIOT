@@ -38,6 +38,14 @@ public class SceneLoader : MonoBehaviour
         if (Instance == this) Instance = null;
     }
 
+    /// <summary>Hides the loading panel. Called by FirstMapLoadingScreen when player is teleported.</summary>
+    public void HideLoadingPanel()
+    {
+        if (loadingPanel != null) loadingPanel.SetActive(false);
+        if (progressBar != null) progressBar.value = 1f;
+        if (progressText != null) progressText.text = "";
+    }
+
     // Public API: call to load a scene. Uses PhotonNetwork.LoadLevel when available (works in both online and OfflineMode).
     public void LoadScene(string sceneName, bool forceLocal = false)
     {
@@ -61,8 +69,8 @@ public class SceneLoader : MonoBehaviour
         {
             yield return null;
         }
-        // ensure UI is hidden (OnSceneLoaded will also run)
-        if (loadingPanel != null) loadingPanel.SetActive(false);
+        if (sceneName != "FIRSTMAP" && loadingPanel != null)
+            loadingPanel.SetActive(false);
     }
 
     IEnumerator CoLocalLoad(string sceneName)
@@ -76,11 +84,17 @@ public class SceneLoader : MonoBehaviour
             if (progressText != null) progressText.text = $"Loading... {Mathf.RoundToInt(progress * 100f)}%";
             yield return null;
         }
-        if (loadingPanel != null) loadingPanel.SetActive(false);
+        if (sceneName != "FIRSTMAP" && loadingPanel != null)
+            loadingPanel.SetActive(false);
     }
 
     void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
+        if (scene.name == "FIRSTMAP")
+        {
+            // Keep panel visible; FirstMapLoadingScreen / ProceduralMapLoader will hide when player is teleported
+            return;
+        }
         if (loadingPanel != null) loadingPanel.SetActive(false);
         if (progressBar != null) progressBar.value = 1f;
         if (progressText != null) progressText.text = "";

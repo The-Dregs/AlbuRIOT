@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemName: Geranium
   description: A medicinal plant.
-  icon: {fileID: 0}
+  icon: {fileID: 21300000, guid: 731566dd965107741b50cecf9b670c5f, type: 3}
   itemType: 0
   maxStack: 10
   healthModifier: 0

@@ -15,8 +15,8 @@ MonoBehaviour:
   enemyType: 7
   enemyName: Tiyanak
   maxHealth: 100
-  basicDamage: 10
-  moveSpeed: 1.5
+  basicDamage: 5
+  moveSpeed: 1
   chaseSpeed: 3.5
   patrolSpeed: 2
   rotationSpeedDegrees: 360
@@ -25,9 +25,9 @@ MonoBehaviour:
   orbitSpeedMultiplier: 0.7
   desiredAttackDistanceFraction: 0.85
   attackRange: 2
-  attackWindup: 0.3
+  attackWindup: 0.8
   attackCooldown: 1.5
-  attackMoveLock: 0.35
+  attackMoveLock: 0.8
   detectionRange: 12
   chaseLoseRange: 15
   enablePatrol: 1
@@ -45,4 +45,3 @@ MonoBehaviour:
   networkUpdateRate: 10
   showDebugGizmos: 0
   debugColor: {r: 1, g: 0, b: 0, a: 1}
-

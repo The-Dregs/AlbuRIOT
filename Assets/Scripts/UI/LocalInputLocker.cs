@@ -1,5 +1,8 @@
 using System.Collections.Generic;
 using UnityEngine;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 public class LocalInputLocker : MonoBehaviour
 {
@@ -12,6 +15,8 @@ public class LocalInputLocker : MonoBehaviour
 
     [Header("Auto-detect local components")]
     public bool autoDetectOnFirstLock = true;
+    [SerializeField] private bool manageOtherCameraControllers = false;
+    [SerializeField] private bool enableDebugLogs = false;
 
     [Tooltip("Manually assign if auto-detection is unreliable")]
     [SerializeField] private ThirdPersonController playerController;
@@ -22,6 +27,9 @@ public class LocalInputLocker : MonoBehaviour
     // track other camera controller scripts (imported assets or examples) that may also respond to mouse input
     private readonly string[] _otherCameraControllerNames = new[] { "CameraControl", "FlyCameraControl", "CameraController", "FreestyleCameraController", "LB_CameraMove", "ProceduralController" };
     private readonly System.Collections.Generic.List<MonoBehaviour> _disabledOtherCameraControllers = new System.Collections.Generic.List<MonoBehaviour>();
+    private readonly System.Collections.Generic.List<MonoBehaviour> _cachedOtherCameraControllers = new System.Collections.Generic.List<MonoBehaviour>(16);
+    // guard: only search/restore camera controllers when the locked state actually changes
+    private bool _cameraLockApplied = false;
 
     private class LockRequest
     {
@@ -45,18 +53,53 @@ public class LocalInputLocker : MonoBehaviour
             return;
         }
         Instance = this;
-        DontDestroyOnLoad(gameObject);
+        // Only persist while actually playing. In edit mode, avoid leaving hidden objects around.
+        if (Application.isPlaying)
+        {
+            DontDestroyOnLoad(gameObject);
+        }
+#if UNITY_EDITOR
+        else
+        {
+            hideFlags = HideFlags.HideAndDontSave;
+        }
+#endif
     }
 
     public static LocalInputLocker Ensure()
     {
         if (Instance == null)
         {
+            // Never auto-spawn singleton while not in play mode (prevents editor crashes / scene pollution).
+            if (!Application.isPlaying)
+                return null;
+
             var go = new GameObject("LocalInputLocker");
             Instance = go.AddComponent<LocalInputLocker>();
         }
         return Instance;
     }
+
+#if UNITY_EDITOR
+    // In the editor, ensure the singleton is cleaned up when exiting play mode to avoid
+    // "Some objects were not cleaned up when closing the scene" warnings.
+    static LocalInputLocker()
+    {
+        // Avoid duplicate subscriptions across recompiles / domain reload variations.
+        EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+        EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+    }
+
+    private static void OnPlayModeStateChanged(PlayModeStateChange state)
+    {
+        if (state == PlayModeStateChange.ExitingPlayMode && Instance != null)
+        {
+            // Destroy immediately so nothing leaks between play sessions in the editor.
+            Object.DestroyImmediate(Instance.gameObject);
+            Instance = null;
+        }
+    }
+#endif
 
     public bool IsLocked => _owners.Count > 0;
 
@@ -154,8 +197,6 @@ public class LocalInputLocker : MonoBehaviour
         {
             cameraOrbit.enabled = true;
             cameraOrbit.SetRotationLocked(wantLockCamera);
-            // debug: report binding
-            Debug.Log($"[LocalInputLocker] cameraOrbit.SetRotationLocked({wantLockCamera}) -> {cameraOrbit.gameObject.name}");
         }
         // also attempt to disable any other camera controllers that might read mouse axes (even if cameraOrbit is null)
         UpdateOtherCameraControllersState(wantLockCamera);
@@ -181,32 +222,44 @@ public class LocalInputLocker : MonoBehaviour
     // find and disable/enable other camera controller MonoBehaviours by name
     private void UpdateOtherCameraControllersState(bool disable)
     {
+        if (!manageOtherCameraControllers) return;
+        // only do expensive search when the desired state actually changes
+        if (disable == _cameraLockApplied) return;
+        _cameraLockApplied = disable;
+
         if (disable)
         {
-            // discover potentially interfering camera controller components and disable them
-            var all = Object.FindObjectsByType<MonoBehaviour>(FindObjectsInactive.Include, FindObjectsSortMode.None);
-            foreach (var mb in all)
+            // discover potentially interfering camera controller components once, then reuse cache
+            if (_cachedOtherCameraControllers.Count == 0)
             {
-                if (mb == null) continue;
-                if (mb is ThirdPersonCameraOrbit) continue; // skip our main orbit
-                var tname = mb.GetType().Name;
-                for (int i = 0; i < _otherCameraControllerNames.Length; i++)
+                var all = Object.FindObjectsByType<MonoBehaviour>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+                foreach (var mb in all)
                 {
-                    if (tname == _otherCameraControllerNames[i])
+                    if (mb == null) continue;
+                    if (mb is ThirdPersonCameraOrbit) continue; // skip our main orbit
+                    var tname = mb.GetType().Name;
+                    for (int i = 0; i < _otherCameraControllerNames.Length; i++)
                     {
-                        if (mb.enabled)
+                        if (tname == _otherCameraControllerNames[i])
                         {
-                            try
-                            {
-                                mb.enabled = false;
-                                _disabledOtherCameraControllers.Add(mb);
-                                Debug.Log($"[LocalInputLocker] disabled other camera controller: {tname} on {mb.gameObject.name}");
-                            }
-                            catch { }
+                            _cachedOtherCameraControllers.Add(mb);
+                            break;
                         }
-                        break;
                     }
                 }
+            }
+
+            for (int i = 0; i < _cachedOtherCameraControllers.Count; i++)
+            {
+                var mb = _cachedOtherCameraControllers[i];
+                if (mb == null || !mb.enabled) continue;
+                try
+                {
+                    mb.enabled = false;
+                    _disabledOtherCameraControllers.Add(mb);
+                    if (enableDebugLogs) Debug.Log($"[LocalInputLocker] disabled other camera controller: {mb.GetType().Name} on {mb.gameObject.name}");
+                }
+                catch { }
             }
         }
         else
@@ -220,7 +273,7 @@ public class LocalInputLocker : MonoBehaviour
                     try
                     {
                         mb.enabled = true;
-                        Debug.Log($"[LocalInputLocker] re-enabled camera controller: {mb.GetType().Name} on {mb.gameObject.name}");
+                        if (enableDebugLogs) Debug.Log($"[LocalInputLocker] re-enabled camera controller: {mb.GetType().Name} on {mb.gameObject.name}");
                     }
                     catch { }
                 }
@@ -249,9 +302,24 @@ public class LocalInputLocker : MonoBehaviour
         playerCombat = null;
         cameraOrbit = null;
         _resolved = false;
+        _cameraLockApplied = false;
+        _disabledOtherCameraControllers.Clear();
+        _cachedOtherCameraControllers.Clear();
         // ensure cursor is unlocked and visible for menus
         Cursor.lockState = CursorLockMode.None;
         Cursor.visible = true;
+    }
+
+    private void OnDestroy()
+    {
+        // Release all component references so scene objects can be GC'd
+        playerController = null;
+        playerCombat = null;
+        cameraOrbit = null;
+        _owners.Clear();
+        _disabledOtherCameraControllers.Clear();
+        _cachedOtherCameraControllers.Clear();
+        _cameraLockApplied = false;
     }
 
     private void ResolveLocalRefs()
@@ -266,7 +334,6 @@ public class LocalInputLocker : MonoBehaviour
             {
                 playerController = c;
                 playerCombat = c.GetComponentInChildren<PlayerCombat>(true) ?? c.GetComponentInParent<PlayerCombat>(true);
-                Debug.Log("localinputlocker bound to local player controller");
                 break;
             }
         }

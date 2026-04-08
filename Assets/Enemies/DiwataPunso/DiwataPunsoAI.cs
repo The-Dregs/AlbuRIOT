@@ -21,7 +21,7 @@ public class DiwataPunsoAI : BaseEnemyAI
     public string rootsTrigger = "Roots";
 
     [Header("Nature Bolt (projectile)")]
-    public EnemyProjectile boltProjectilePrefab;
+    public string boltProjectilePrefabPath = "Enemies/Projectiles/Bolt Projectile"; // Resources path
     public Transform boltMuzzle;
     public int boltDamage = 15;
     public float boltSpeed = 14f;
@@ -39,21 +39,19 @@ public class DiwataPunsoAI : BaseEnemyAI
     public float rootsPreferredMinDistance = 3.2f;
     public float rootsPreferredMaxDistance = 8.5f;
     [Range(0f, 1f)] public float rootsSkillWeight = 0.7f;
-    [SerializeField] private float rootsStoppageTime = 1f;
+    public float rootsStoppageTime = 1f;
+    public float rootsRecoveryTime = 0.5f;
     public float boltPreferredMinDistance = 7f;
     public float boltPreferredMaxDistance = 20f;
     [Range(0f, 1f)] public float boltSkillWeight = 0.8f;
-    [SerializeField] private float boltStoppageTime = 1f;
+    public float boltStoppageTime = 1f;
+    public float boltRecoveryTime = 0.5f;
 
     private float lastRootsTime = -9999f;
     private float lastBoltTime = -9999f;
-    private AudioSource audioSource;
+    private Coroutine activeAbility;
 
-    protected override void InitializeEnemy()
-    {
-        audioSource = GetComponent<AudioSource>();
-        if (audioSource == null) audioSource = gameObject.AddComponent<AudioSource>();
-    }
+    protected override void InitializeEnemy() { }
 
     protected override void BuildBehaviorTree()
     {
@@ -61,7 +59,7 @@ public class DiwataPunsoAI : BaseEnemyAI
         var hasTarget = new ConditionNode(blackboard, HasTarget, "has_target");
         var targetInDetection = new ConditionNode(blackboard, TargetInDetectionRange, "in_detect_range");
         var moveToTarget = new ActionNode(blackboard, MoveTowardsTarget, "move_to_target");
-        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRange, "in_attack_range");
+        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRangeAndFacing, "in_attack_range_facing");
         var basicAttack = new ActionNode(blackboard, () => { PerformBasicAttack(); return NodeState.Success; }, "basic");
         var canRoots = new ConditionNode(blackboard, CanRoots, "can_roots");
         var doRoots = new ActionNode(blackboard, () => { StartRoots(); return NodeState.Success; }, "roots");
@@ -93,15 +91,17 @@ public class DiwataPunsoAI : BaseEnemyAI
         var target = blackboard.Get<Transform>("target");
         if (target == null) return;
 
-        if (animator != null && HasTrigger(attackTrigger)) animator.SetTrigger(attackTrigger);
+        if (HasTrigger(attackTrigger)) SetTriggerSync(attackTrigger);
+        PlayAttackWindupSfx();
 
         float radius = Mathf.Max(0.8f, enemyData.attackRange);
         Vector3 center = transform.position + transform.forward * (enemyData.attackRange * 0.5f);
+        PlayAttackImpactSfx();
         var cols = Physics.OverlapSphere(center, radius, LayerMask.GetMask("Player"));
         foreach (var c in cols)
         {
             var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null) ps.TakeDamage(enemyData.basicDamage);
+            if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, enemyData.basicDamage);
         }
 
         lastAttackTime = Time.time;
@@ -110,7 +110,7 @@ public class DiwataPunsoAI : BaseEnemyAI
 
     protected override bool TrySpecialAbilities()
     {
-        if (isBusy) return false;
+        if (isBusy || activeAbility != null) return false;
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
         float dist = Vector3.Distance(transform.position, target.position);
@@ -138,13 +138,15 @@ public class DiwataPunsoAI : BaseEnemyAI
     {
         lastRootsTime = Time.time;
         if (enemyData != null) lastAttackTime = Time.time;
-        StartCoroutine(CoRoots());
+        activeAbility = StartCoroutine(CoRoots());
     }
 
     private IEnumerator CoRoots()
     {
-        if (animator != null && HasTrigger(rootsTrigger)) animator.SetTrigger(rootsTrigger);
-        if (audioSource != null && rootsWindupSFX != null) audioSource.PlayOneShot(rootsWindupSFX);
+        BeginAction(AIState.Special1);
+        Quaternion lockedRotation = transform.rotation;
+        if (HasTrigger(rootsTrigger)) SetTriggerSync(rootsTrigger);
+        PlaySfx(rootsWindupSFX);
         GameObject wind = null;
         if (rootsWindupVFX != null)
         {
@@ -160,7 +162,7 @@ public class DiwataPunsoAI : BaseEnemyAI
             fx.transform.localPosition = rootsVFXOffset;
             if (rootsVFXScale > 0f) fx.transform.localScale = Vector3.one * rootsVFXScale;
         }
-        if (audioSource != null && rootsImpactSFX != null) audioSource.PlayOneShot(rootsImpactSFX);
+        PlaySfx(rootsImpactSFX);
 
         var target = blackboard.Get<Transform>("target");
         if (target != null)
@@ -173,11 +175,29 @@ public class DiwataPunsoAI : BaseEnemyAI
                 var ps = hit.collider.GetComponentInParent<PlayerStats>();
                 if (ps != null)
                 {
-                    ps.TakeDamage(rootsDamage);
+                    DamageRelay.ApplyToPlayer(ps.gameObject, rootsDamage);
                     // snare effect can be handled by status system if available
                 }
             }
         }
+        if (rootsStoppageTime > 0f)
+        {
+            float stopTimer = rootsStoppageTime;
+            float quarterStoppage = rootsStoppageTime * 0.75f;
+            while (stopTimer > 0f)
+            {
+                stopTimer -= Time.deltaTime;
+                transform.rotation = lockedRotation;
+                if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+                if (stopTimer <= quarterStoppage && HasBool("Exhausted")) SetBoolSync("Exhausted", true);
+                yield return null;
+            }
+            if (HasBool("Exhausted")) SetBoolSync("Exhausted", false);
+        }
+        EndAction();
+        if (rootsRecoveryTime > 0f)
+            yield return new WaitForSeconds(rootsRecoveryTime);
+        activeAbility = null;
     }
 
     private bool CanBolt()
@@ -191,13 +211,15 @@ public class DiwataPunsoAI : BaseEnemyAI
     {
         lastBoltTime = Time.time;
         if (enemyData != null) lastAttackTime = Time.time;
-        StartCoroutine(CoBolt());
+        activeAbility = StartCoroutine(CoBolt());
     }
 
     private IEnumerator CoBolt()
     {
-        if (animator != null && HasTrigger(boltTrigger)) animator.SetTrigger(boltTrigger);
-        if (audioSource != null && boltWindupSFX != null) audioSource.PlayOneShot(boltWindupSFX);
+        BeginAction(AIState.Special2);
+        Quaternion lockedRotation = transform.rotation;
+        if (HasTrigger(boltTrigger)) SetTriggerSync(boltTrigger);
+        PlaySfx(boltWindupSFX);
         GameObject wind = null;
         if (boltWindupVFX != null)
         {
@@ -207,7 +229,7 @@ public class DiwataPunsoAI : BaseEnemyAI
         }
         yield return new WaitForSeconds(0.1f);
         if (wind != null) Destroy(wind);
-        if (audioSource != null && boltFireSFX != null) audioSource.PlayOneShot(boltFireSFX);
+        PlaySfx(boltFireSFX);
 
         var target = blackboard.Get<Transform>("target");
         Vector3 muzzlePos = boltMuzzle != null ? boltMuzzle.position : (transform.position + transform.forward * 1.0f);
@@ -215,11 +237,31 @@ public class DiwataPunsoAI : BaseEnemyAI
         dir.y = 0f;
         if (dir.sqrMagnitude > 0.0001f) dir.Normalize(); else dir = transform.forward;
 
-        if (boltProjectilePrefab != null)
+        if (!string.IsNullOrEmpty(boltProjectilePrefabPath))
         {
-            var proj = Instantiate(boltProjectilePrefab, muzzlePos, Quaternion.LookRotation(dir));
-            proj.Initialize(gameObject, boltDamage, boltSpeed, boltLifetime, null);
-            proj.maxDistance = boltRange;
+            // Network-safe instantiation
+            GameObject projObj;
+            if (PhotonNetwork.IsConnected && !PhotonNetwork.OfflineMode)
+                projObj = PhotonNetwork.Instantiate(boltProjectilePrefabPath, muzzlePos, Quaternion.LookRotation(dir));
+            else
+            {
+                // Load prefab from Resources for offline mode
+                GameObject prefab = Resources.Load<GameObject>(boltProjectilePrefabPath);
+                if (prefab != null)
+                    projObj = Instantiate(prefab, muzzlePos, Quaternion.LookRotation(dir));
+                else
+                {
+                    Debug.LogError($"[DiwataPunsoAI] Failed to load projectile prefab from path: {boltProjectilePrefabPath}");
+                    yield break;
+                }
+            }
+            
+            var proj = projObj.GetComponent<EnemyProjectile>();
+            if (proj != null)
+            {
+                proj.Initialize(gameObject, boltDamage, boltSpeed, boltLifetime, null);
+                proj.maxDistance = boltRange;
+            }
         }
         else
         {
@@ -227,9 +269,28 @@ public class DiwataPunsoAI : BaseEnemyAI
             if (Physics.Raycast(muzzlePos, dir, out var rh, boltRange, ~0))
             {
                 var ps = rh.collider.GetComponentInParent<PlayerStats>();
-                if (ps != null) ps.TakeDamage(boltDamage);
+        if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, boltDamage);
             }
         }
+        yield return null;
+        if (boltStoppageTime > 0f)
+        {
+            float stopTimer = boltStoppageTime;
+            float quarterStoppage = boltStoppageTime * 0.75f;
+            while (stopTimer > 0f)
+            {
+                stopTimer -= Time.deltaTime;
+                transform.rotation = lockedRotation;
+                if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+                if (stopTimer <= quarterStoppage && HasBool("Exhausted")) SetBoolSync("Exhausted", true);
+                yield return null;
+            }
+            if (HasBool("Exhausted")) SetBoolSync("Exhausted", false);
+        }
+        EndAction();
+        if (boltRecoveryTime > 0f)
+            yield return new WaitForSeconds(boltRecoveryTime);
+        activeAbility = null;
     }
 
     private bool IsFacingTarget(Transform target, float maxAngle)

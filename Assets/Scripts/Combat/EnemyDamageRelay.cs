@@ -42,24 +42,34 @@ public static class EnemyDamageRelay
         }
         else
         {
-            // Get PhotonView from the BaseEnemyAI component (MonoBehaviourPun provides photonView)
-            var enemyAI = enemy.GetComponent<BaseEnemyAI>();
-            if (enemyAI != null && enemyAI.photonView != null)
+            // Get PhotonView from the IEnemyDamageable component
+            var pv = enemy.GetComponent<PhotonView>();
+            if (pv != null)
             {
-                enemyAI.photonView.RPC("RPC_EnemyTakeDamage", RpcTarget.MasterClient, amount, sourceViewId);
-            }
-            else
-            {
-                // Fallback: try GetComponent if MonoBehaviourPun approach doesn't work
-                var pv = enemy.GetComponent<PhotonView>();
-                if (pv != null)
+                // Try to determine which RPC to call based on component type
+                var enemyAI = enemy.GetComponent<BaseEnemyAI>();
+                if (enemyAI != null)
                 {
+                    // Standard enemy AI - use RPC_EnemyTakeDamage
                     pv.RPC("RPC_EnemyTakeDamage", RpcTarget.MasterClient, amount, sourceViewId);
                 }
                 else
                 {
-                    Debug.LogWarning($"[EnemyDamageRelay] No PhotonView found on enemy {enemy.name}. Cannot send damage RPC.");
+                    // Other IEnemyDamageable types (e.g., DestructiblePlant) - use RPC_ApplyHit
+                    var plant = enemy.GetComponent<DestructiblePlant>();
+                    if (plant != null)
+                    {
+                        pv.RPC("RPC_ApplyHit", RpcTarget.MasterClient, sourceViewId);
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"[EnemyDamageRelay] Unknown IEnemyDamageable type on {enemy.name}. Cannot send damage RPC.");
+                    }
                 }
+            }
+            else
+            {
+                Debug.LogWarning($"[EnemyDamageRelay] No PhotonView found on enemy {enemy.name}. Cannot send damage RPC.");
             }
         }
     }

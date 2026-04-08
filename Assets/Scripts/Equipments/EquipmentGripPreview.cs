@@ -68,12 +68,11 @@ public class EquipmentGripPreview : MonoBehaviour
             previewInstance.hideFlags = HideFlags.DontSave;
         }
 
-        // by default keep prefab local pose; optionally apply overrides from ItemData
-        if (applyItemOverrides && item.overrideTransform)
-        {
-            previewInstance.transform.localPosition = item.modelLocalPosition;
-            previewInstance.transform.localRotation = Quaternion.Euler(item.modelLocalEulerAngles);
-        }
+        // by default keep prefab local pose; optionally apply overrides from ItemData + per-player hold offset
+        Vector3 basePos = (applyItemOverrides && item.overrideTransform) ? item.modelLocalPosition : Vector3.zero;
+        Quaternion baseRot = (applyItemOverrides && item.overrideTransform) ? Quaternion.Euler(item.modelLocalEulerAngles) : Quaternion.identity;
+        previewInstance.transform.localPosition = basePos + equipmentManager.holdPositionOffset;
+        previewInstance.transform.localRotation = baseRot * Quaternion.Euler(equipmentManager.holdRotationOffset);
         // scale always from ItemData
         previewInstance.transform.localScale = item.modelScale;
     }
@@ -105,6 +104,18 @@ public class EquipmentGripPreview : MonoBehaviour
 #endif
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -696,11 +696,33 @@ public class LobbyManager : MonoBehaviourPunCallbacks
         ShowMainMenu();
         if (lobbyPanel != null) lobbyPanel.SetActive(false);
         if (loadingPanel != null) loadingPanel.SetActive(false);
+        
+        // Stop all coroutines
+        StopAllCoroutines();
+        
+        // Cleanup before leaving room
+        if (MemoryCleanupManager.Instance != null)
+        {
+            MemoryCleanupManager.Instance.CleanupProceduralGeneration();
+        }
+        
         if (PhotonNetwork.InRoom && !PhotonNetwork.OfflineMode) PhotonNetwork.LeaveRoom();
         if (roomCodeText != null) roomCodeText.text = "";
         ClearPlayerSlots();
         createdRoomCode = "";
         pendingJoinCode = null;
+    }
+    
+    void OnDestroy()
+    {
+        // Stop all coroutines
+        StopAllCoroutines();
+
+        // safety: disconnect photon if still connected during shutdown
+        if (GlobalPlaymodeCleanup.IsQuitting && PhotonNetwork.IsConnected)
+        {
+            try { PhotonNetwork.Disconnect(); } catch { }
+        }
     }
 
     // coroutine to wait for Photon connection, then fallback to offline mode if timeout

@@ -24,16 +24,35 @@ public class PlayerQuestArrow : MonoBehaviour
     private QuestManager questManager;
     private float recheckTimer = 0f;
     private PhotonView pv;
+    private QuestAreaTrigger[] cachedQuestAreas = System.Array.Empty<QuestAreaTrigger>();
+    private NPCDialogueTrigger[] cachedNpcTriggers = System.Array.Empty<NPCDialogueTrigger>();
+    private float nextAreaCacheRefreshTime = 0f;
+    private float nextNpcCacheRefreshTime = 0f;
+    [SerializeField, Range(0.25f, 5f)] private float targetCacheRefreshInterval = 1.5f;
 
     void Awake()
     {
         pv = GetComponent<PhotonView>();
         questManager = FindFirstObjectByType<QuestManager>();
+        
+        if (arrowRoot == null)
+        {
+            Transform child = transform.Find("QuestArrow/ArrowRoot");
+            if (child != null) arrowRoot = child;
+        }
+    }
+
+    void Start()
+    {
+        if (arrowRoot != null && arrowRoot.gameObject != null)
+        {
+            arrowRoot.gameObject.SetActive(true);
+        }
     }
 
     void OnEnable()
     {
-        // initial resolve
+        questManager = FindFirstObjectByType<QuestManager>();
         ResolveTarget();
         UpdateVisibility();
         SubscribeToQuestEvents(true);
@@ -57,11 +76,23 @@ public class PlayerQuestArrow : MonoBehaviour
             UpdateVisibility();
         }
 
-        if (arrowRoot == null) return;
+        if (arrowRoot == null)
+        {
+            Transform child = transform.Find("QuestArrow/ArrowRoot");
+            if (child != null) arrowRoot = child;
+            if (arrowRoot == null) return;
+        }
+        
         if (target == null)
         {
-            if (hideWhenNoTarget) arrowRoot.gameObject.SetActive(false);
+            if (hideWhenNoTarget && arrowRoot != null) arrowRoot.gameObject.SetActive(false);
             return;
+        }
+
+        // Ensure arrow is active when target exists
+        if (arrowRoot != null && !arrowRoot.gameObject.activeSelf)
+        {
+            arrowRoot.gameObject.SetActive(true);
         }
 
         // compute direction on horizontal plane
@@ -85,7 +116,6 @@ public class PlayerQuestArrow : MonoBehaviour
             arrowRoot.rotation = Quaternion.Slerp(arrowRoot.rotation, desiredRot, Time.deltaTime * smooth);
         else
             arrowRoot.rotation = desiredRot;
-        if (!arrowRoot.gameObject.activeSelf) arrowRoot.gameObject.SetActive(true);
     }
 
     // allows manual overriding of the target if needed by other systems
@@ -104,7 +134,11 @@ public class PlayerQuestArrow : MonoBehaviour
 
     private void ResolveTarget()
     {
-        if (questManager == null) questManager = FindFirstObjectByType<QuestManager>();
+        if (questManager == null) 
+        {
+            questManager = FindFirstObjectByType<QuestManager>();
+            if (questManager == null) questManager = QuestManager.Instance;
+        }
         if (questManager == null)
         {
             target = null; return;
@@ -128,11 +162,12 @@ public class PlayerQuestArrow : MonoBehaviour
                 case ObjectiveType.ReachArea:
                     target = FindQuestAreaTransform(obj.targetId);
                     return;
+                case ObjectiveType.FindArea:
+                    target = null;
+                    return;
                 case ObjectiveType.TalkTo:
                     target = FindNpcTransform(obj.targetId);
                     return;
-                case ObjectiveType.Kill:
-                case ObjectiveType.Collect:
                 default:
                     target = null; return;
             }
@@ -142,6 +177,9 @@ public class PlayerQuestArrow : MonoBehaviour
         {
             case ObjectiveType.ReachArea:
                 target = FindQuestAreaTransform(q.targetId);
+                break;
+            case ObjectiveType.FindArea:
+                target = null;
                 break;
             case ObjectiveType.TalkTo:
                 target = FindNpcTransform(q.targetId);
@@ -155,7 +193,12 @@ public class PlayerQuestArrow : MonoBehaviour
     private Transform FindQuestAreaTransform(string areaId)
     {
         if (string.IsNullOrEmpty(areaId)) return null;
-        var areas = FindObjectsByType<QuestAreaTrigger>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+        if (Time.time >= nextAreaCacheRefreshTime || cachedQuestAreas == null || cachedQuestAreas.Length == 0)
+        {
+            cachedQuestAreas = FindObjectsByType<QuestAreaTrigger>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+            nextAreaCacheRefreshTime = Time.time + Mathf.Max(0.25f, targetCacheRefreshInterval);
+        }
+        var areas = cachedQuestAreas;
         Transform best = null; float bestDist = float.MaxValue;
         foreach (var a in areas)
         {
@@ -171,7 +214,12 @@ public class PlayerQuestArrow : MonoBehaviour
     private Transform FindNpcTransform(string npcId)
     {
         if (string.IsNullOrEmpty(npcId)) return null;
-        var npcs = FindObjectsByType<NPCDialogueTrigger>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+        if (Time.time >= nextNpcCacheRefreshTime || cachedNpcTriggers == null || cachedNpcTriggers.Length == 0)
+        {
+            cachedNpcTriggers = FindObjectsByType<NPCDialogueTrigger>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+            nextNpcCacheRefreshTime = Time.time + Mathf.Max(0.25f, targetCacheRefreshInterval);
+        }
+        var npcs = cachedNpcTriggers;
         Transform best = null; float bestDist = float.MaxValue;
         foreach (var n in npcs)
         {

@@ -31,18 +31,13 @@ public class SirenaAI : BaseEnemyAI
     private float lastBurstTime = -9999f;
     private float lastAnySkillRecoveryEnd = -9999f;
     private float lastAnySkillRecoveryStart = -9999f;
-    private AudioSource audioSource;
     private Coroutine activeAbility;
     private Coroutine basicRoutine;
 
     // Debug accessors
     public float BurstCooldownRemaining => Mathf.Max(0f, burstCooldown - (Time.time - lastBurstTime));
 
-    protected override void InitializeEnemy()
-    {
-        audioSource = GetComponent<AudioSource>();
-        if (audioSource == null) audioSource = gameObject.AddComponent<AudioSource>();
-    }
+    protected override void InitializeEnemy() { }
 
     protected override void BuildBehaviorTree()
     {
@@ -50,7 +45,7 @@ public class SirenaAI : BaseEnemyAI
         var hasTarget = new ConditionNode(blackboard, HasTarget, "has_target");
         var targetInDetection = new ConditionNode(blackboard, TargetInDetectionRange, "in_detect_range");
         var moveToTarget = new ActionNode(blackboard, MoveTowardsTarget, "move_to_target");
-        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRange, "in_attack_range");
+        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRangeAndFacing, "in_attack_range_facing");
         var basicAttack = new ActionNode(blackboard, () => { PerformBasicAttack(); return NodeState.Success; }, "basic");
         var canBurst = new ConditionNode(blackboard, CanBurst, "can_burst");
         var doBurst = new ActionNode(blackboard, () => { StartBurst(); return NodeState.Success; }, "burst");
@@ -88,29 +83,30 @@ public class SirenaAI : BaseEnemyAI
     private IEnumerator CoBasicAttack(Transform target)
     {
         BeginAction(AIState.BasicAttack);
+        Quaternion lockedRotation = transform.rotation;
 
-        // Windup animation trigger
-        if (animator != null)
-        {
-            if (HasTrigger(attackWindupTrigger))
-                animator.SetTrigger(attackWindupTrigger);
-            else if (HasTrigger(attackTrigger))
-                animator.SetTrigger(attackTrigger);
-        }
+        // Windup animation trigger (sync to network)
+        if (HasTrigger(attackWindupTrigger))
+            SetTriggerSync(attackWindupTrigger);
+        else if (HasTrigger(attackTrigger))
+            SetTriggerSync(attackTrigger);
+        PlayAttackWindupSfx();
 
-        // Windup phase - freeze movement during windup
+        // Windup phase - lock position and rotation
         float windup = Mathf.Max(0f, enemyData.attackWindup);
         while (windup > 0f)
         {
             windup -= Time.deltaTime;
+            transform.rotation = lockedRotation;
             if (controller != null && controller.enabled)
                 controller.SimpleMove(Vector3.zero);
             yield return null;
         }
 
-        // Impact animation trigger
-        if (animator != null && HasTrigger(attackImpactTrigger))
-            animator.SetTrigger(attackImpactTrigger);
+        // Impact animation trigger (sync to network)
+        if (HasTrigger(attackImpactTrigger))
+            SetTriggerSync(attackImpactTrigger);
+        PlayAttackImpactSfx();
 
         // Apply damage after windup
         float radius = Mathf.Max(0.8f, enemyData.attackRange);
@@ -119,17 +115,20 @@ public class SirenaAI : BaseEnemyAI
         foreach (var c in cols)
         {
             var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null) ps.TakeDamage(enemyData.basicDamage);
+            if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, enemyData.basicDamage);
         }
 
-        // Post-stop using attackMoveLock duration
+        // Exhausted phase - lock position, rotation, set Exhausted animator
         float post = Mathf.Max(0.1f, enemyData.attackMoveLock);
+        if (post > 0f && HasBool("Exhausted")) SetBoolSync("Exhausted", true);
         while (post > 0f)
         {
             post -= Time.deltaTime;
+            transform.rotation = lockedRotation;
             if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
             yield return null;
         }
+        if (HasBool("Exhausted")) SetBoolSync("Exhausted", false);
 
         lastAttackTime = Time.time;
         attackLockTimer = enemyData.attackMoveLock;
@@ -168,11 +167,10 @@ public class SirenaAI : BaseEnemyAI
     {
         BeginAction(AIState.Special1);
 
-        // Windup phase - separate trigger, VFX, and SFX
-        if (animator != null && HasTrigger(burstWindupTrigger))
-            animator.SetTrigger(burstWindupTrigger);
-        if (audioSource != null && burstWindupSFX != null)
-            audioSource.PlayOneShot(burstWindupSFX);
+        // Windup phase - separate trigger, VFX, and SFX (sync to network)
+        if (HasTrigger(burstWindupTrigger))
+            SetTriggerSync(burstWindupTrigger);
+        PlaySfx(burstWindupSFX);
         GameObject wind = null;
         if (burstWindupVFX != null)
         {
@@ -193,9 +191,9 @@ public class SirenaAI : BaseEnemyAI
         }
         if (wind != null) Destroy(wind);
 
-        // Impact/Main phase - separate trigger, VFX, and SFX
-        if (animator != null && HasTrigger(burstMainTrigger))
-            animator.SetTrigger(burstMainTrigger);
+        // Impact/Main phase - separate trigger, VFX, and SFX (sync to network)
+        if (HasTrigger(burstMainTrigger))
+            SetTriggerSync(burstMainTrigger);
 
         if (burstImpactVFX != null)
         {
@@ -204,21 +202,20 @@ public class SirenaAI : BaseEnemyAI
             if (burstImpactVFXScale > 0f)
                 fx.transform.localScale = Vector3.one * burstImpactVFXScale;
         }
-        if (audioSource != null && burstImpactSFX != null)
-            audioSource.PlayOneShot(burstImpactSFX);
+        PlaySfx(burstImpactSFX);
 
         // Apply damage
         var cols = Physics.OverlapSphere(transform.position, burstRadius, LayerMask.GetMask("Player"));
         foreach (var c in cols)
         {
             var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null) ps.TakeDamage(burstDamage);
+        if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, burstDamage);
         }
 
         // Stoppage recovery (AI frozen after attack)
         if (burstStoppageTime > 0f)
         {
-            if (animator != null && HasTrigger(skillStoppageTrigger)) animator.SetTrigger(skillStoppageTrigger);
+            if (HasTrigger(skillStoppageTrigger)) SetTriggerSync(skillStoppageTrigger);
 
             float stopTimer = burstStoppageTime;
             float quarterStoppage = burstStoppageTime * 0.75f;
@@ -230,16 +227,16 @@ public class SirenaAI : BaseEnemyAI
                     controller.SimpleMove(Vector3.zero);
 
                 // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
-                if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
+                if (stopTimer <= quarterStoppage)
                 {
-                    animator.SetBool("Exhausted", true);
+                    SetBoolSync("Exhausted", true);
                 }
 
                 yield return null;
             }
 
             // Clear Exhausted boolean parameter
-            if (animator != null) animator.SetBool("Exhausted", false);
+            SetBoolSync("Exhausted", false);
         }
 
         // End busy state so AI can move during recovery

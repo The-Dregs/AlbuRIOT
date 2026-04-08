@@ -9,34 +9,163 @@ public class EquipmentManager : MonoBehaviourPun
 
     [Header("Equipment Model Handling")]
     public Transform handTransform; // Assign this in the Inspector to your character's hand bone
+    [Tooltip("Per-player offset for all equipped items. Use to correct grip for different models/skeletons (e.g. sword rotated outwards on female model).")]
+    public Vector3 holdPositionOffset = Vector3.zero;
+    [Tooltip("Per-player rotation offset (Euler degrees) for all equipped items.")]
+    public Vector3 holdRotationOffset = Vector3.zero;
     private GameObject equippedModelInstance;
+
+#if UNITY_EDITOR
+    void OnValidate()
+    {
+        // Notify EquipmentGripPreview so it updates instantly when hold offsets change
+        var previews = Object.FindObjectsByType<EquipmentGripPreview>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+        foreach (var p in previews)
+        {
+            if (p != null && p.equipmentManager == this && p.previewActive)
+                p.RefreshPreview();
+        }
+    }
+#endif
+
+    // static cache for persisting equipped item across scene loads
+    private static string cachedEquippedItemName;
+    private static bool hasCachedEquipment;
+
+    /// <summary>
+    /// Caches the local player's equipped item name so it can be restored after a scene load.
+    /// </summary>
+    public static void CacheLocalEquipment()
+    {
+        var allEquip = Object.FindObjectsByType<EquipmentManager>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+        foreach (var em in allEquip)
+        {
+            var pv = em.GetComponent<PhotonView>();
+            if (pv != null && !pv.IsMine) continue;
+
+            if (em.equippedItem != null)
+            {
+                cachedEquippedItemName = em.equippedItem.itemName;
+                hasCachedEquipment = true;
+                Debug.Log($"[EquipmentManager] Cached equipped item '{cachedEquippedItemName}' for scene transition.");
+            }
+            else
+            {
+                cachedEquippedItemName = null;
+                hasCachedEquipment = false;
+            }
+            return;
+        }
+    }
+
+    /// <summary>
+    /// Restores the cached equipped item on the local player after a scene load.
+    /// The item is looked up from the inventory first; if not found there, from the ItemDatabase.
+    /// </summary>
+    public void TryRestoreCachedEquipment()
+    {
+        if (!hasCachedEquipment || string.IsNullOrEmpty(cachedEquippedItemName)) return;
+
+        var pv = GetComponent<PhotonView>();
+        if (pv != null && !pv.IsMine) return;
+
+        // already have the right item equipped
+        if (equippedItem != null && equippedItem.itemName == cachedEquippedItemName) return;
+
+        // look up the ItemData from the item database
+        var db = ItemDatabase.Load();
+        if (db == null)
+        {
+            Debug.LogWarning("[EquipmentManager] Cannot restore cached equipment: ItemDatabase not found.");
+            return;
+        }
+
+        ItemData item = db.FindByName(cachedEquippedItemName);
+        if (item == null)
+        {
+            Debug.LogWarning($"[EquipmentManager] Cannot restore cached equipment: '{cachedEquippedItemName}' not found in database.");
+            hasCachedEquipment = false;
+            return;
+        }
+
+        // if the item is in inventory, remove it first so we don't duplicate
+        if (playerInventory != null)
+        {
+            int slot = playerInventory.FindItemSlot(item);
+            if (slot >= 0)
+            {
+                playerInventory.RemoveItem(item, 1);
+            }
+        }
+
+        // equip without going through inventory removal flow
+        if (equippedItem != null)
+        {
+            // return current to inventory before equipping cached one
+            if (playerInventory != null && equippedItem != item)
+            {
+                playerInventory.AddItem(equippedItem, 1, silent: true);
+            }
+            if (playerStats != null) playerStats.RemoveEquipment(equippedItem);
+        }
+
+        equippedItem = item;
+        if (playerStats != null) playerStats.ApplyEquipment(item);
+        EquipModelLocal(item);
+
+        // sync visuals to other clients
+        if (pv != null && (PhotonNetwork.IsConnected || PhotonNetwork.OfflineMode))
+            pv.RPC(nameof(RPC_EquipModel), RpcTarget.Others, cachedEquippedItemName);
+
+        Debug.Log($"[EquipmentManager] Restored cached equipped item '{cachedEquippedItemName}' after scene transition.");
+        hasCachedEquipment = false;
+        cachedEquippedItemName = null;
+    }
 
     void Awake()
     {
-        // Auto-find handTransform if not assigned (look for common hand bone names)
+        ResolveHandTransform();
+    }
+
+    /// <summary>
+    /// Resolves handTransform from the current character's skeleton.
+    /// Always resolves at runtime so each player (different models/skeletons) gets the correct hand.
+    /// Uses HumanBodyBones for Humanoid rigs (works across different models regardless of bone names),
+    /// then falls back to name-based search, then keeps Inspector assignment.
+    /// </summary>
+    private void ResolveHandTransform()
+    {
+        var animator = GetComponentInChildren<Animator>();
+        if (animator == null) return;
+
+        // Prefer HumanBodyBones: works for any Humanoid rig regardless of bone names
+        if (animator.isHuman && animator.avatar != null && animator.avatar.isHuman)
+        {
+            Transform humanHand = animator.GetBoneTransform(HumanBodyBones.RightHand);
+            if (humanHand != null)
+            {
+                handTransform = humanHand;
+                Debug.Log($"[EquipmentManager] Resolved handTransform via HumanBodyBones: {handTransform.name}");
+                return;
+            }
+        }
+
+        // Fallback: name-based search (for generic rigs)
+        string[] handNames = { "mixamorig:RightHand", "RightHand", "mixamorig:Hand_R", "Hand_R", "Bip01_R_Hand", "hand_r", "Hand" };
+        foreach (var handName in handNames)
+        {
+            Transform hand = FindChildRecursive(animator.transform, handName);
+            if (hand != null)
+            {
+                handTransform = hand;
+                Debug.Log($"[EquipmentManager] Auto-found handTransform by name: {handTransform.name}");
+                return;
+            }
+        }
+
         if (handTransform == null)
         {
-            var animator = GetComponentInChildren<Animator>();
-            if (animator != null)
-            {
-                // Try common hand bone names
-                string[] handNames = { "mixamorig:RightHand", "RightHand", "mixamorig:Hand_R", "Hand_R", "Hand" };
-                foreach (var handName in handNames)
-                {
-                    Transform hand = FindChildRecursive(animator.transform, handName);
-                    if (hand != null)
-                    {
-                        handTransform = hand;
-                        Debug.Log($"[EquipmentManager] Auto-found handTransform: {handTransform.name}");
-                        break;
-                    }
-                }
-            }
-            
-            if (handTransform == null)
-            {
-                Debug.LogWarning("[EquipmentManager] handTransform not assigned and could not be auto-found. Please assign in Inspector.");
-            }
+            Debug.LogWarning("[EquipmentManager] handTransform not assigned and could not be auto-found. Assign in Inspector or use a Humanoid rig.");
         }
     }
 
@@ -134,27 +263,22 @@ public class EquipmentManager : MonoBehaviourPun
             return;
         }
         
-        // Clear previous model
-        RPC_ClearModel();
+        // clear previous model instance only (don't call RPC_ClearModel which also nulls equippedItem)
+        if (equippedModelInstance != null)
+        {
+            Destroy(equippedModelInstance);
+            equippedModelInstance = null;
+        }
         
         // Instantiate new model as child of hand transform
         equippedModelInstance = Instantiate(item.modelPrefab, handTransform);
         equippedModelInstance.name = $"{item.itemName}_Model";
         
-        // Apply transform overrides if specified, otherwise use prefab defaults
-        if (item.overrideTransform)
-        {
-            equippedModelInstance.transform.localPosition = item.modelLocalPosition;
-            equippedModelInstance.transform.localRotation = Quaternion.Euler(item.modelLocalEulerAngles);
-            Debug.Log($"[EquipmentManager] Applied transform overrides for {item.itemName}: pos={item.modelLocalPosition}, rot={item.modelLocalEulerAngles}");
-        }
-        else
-        {
-            // Reset to local origin if no overrides (ensures model is at hand position)
-            equippedModelInstance.transform.localPosition = Vector3.zero;
-            equippedModelInstance.transform.localRotation = Quaternion.identity;
-            Debug.Log($"[EquipmentManager] Using default transform for {item.itemName} (no overrides)");
-        }
+        // Apply transform: item overrides (or prefab default) + per-player hold offset
+        Vector3 basePos = item.overrideTransform ? item.modelLocalPosition : Vector3.zero;
+        Quaternion baseRot = item.overrideTransform ? Quaternion.Euler(item.modelLocalEulerAngles) : Quaternion.identity;
+        equippedModelInstance.transform.localPosition = basePos + holdPositionOffset;
+        equippedModelInstance.transform.localRotation = baseRot * Quaternion.Euler(holdRotationOffset);
         
         // Always apply scale
         equippedModelInstance.transform.localScale = item.modelScale;
@@ -303,12 +427,15 @@ public class EquipmentManager : MonoBehaviourPun
             return;
         }
         
+        // sync equipped item reference so other systems (e.g. DestructiblePlant) can check it
+        equippedItem = item;
         EquipModelLocal(item);
     }
 
     [PunRPC]
     private void RPC_ClearModel()
     {
+        equippedItem = null;
         if (equippedModelInstance != null)
         {
             Destroy(equippedModelInstance);

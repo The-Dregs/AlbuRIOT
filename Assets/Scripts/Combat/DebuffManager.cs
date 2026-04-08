@@ -187,7 +187,7 @@ public class DebuffManager : MonoBehaviourPun
         {
             case DebuffType.Bleed:
                 int bleedDamage = Mathf.RoundToInt(debuff.debuffData.tickDamage * debuff.magnitude);
-                playerStats.TakeDamage(bleedDamage);
+                DamageRelay.ApplyToPlayer(playerStats.gameObject, bleedDamage);
                 break;
                 
             case DebuffType.StaminaBurn:
@@ -197,7 +197,7 @@ public class DebuffManager : MonoBehaviourPun
                 
             case DebuffType.Poison:
                 int poisonDamage = Mathf.RoundToInt(debuff.debuffData.tickDamage * debuff.magnitude);
-                playerStats.TakeDamage(poisonDamage);
+                DamageRelay.ApplyToPlayer(playerStats.gameObject, poisonDamage);
                 break;
         }
         

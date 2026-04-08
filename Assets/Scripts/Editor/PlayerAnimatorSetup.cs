@@ -8,7 +8,6 @@ public class PlayerAnimatorSetup : EditorWindow
     private bool addComboStates = true;
     private bool addPowerStates = true;
     
-    [MenuItem("Tools/AlbuRIOT/Setup Player Animator")]
     public static void ShowWindow()
     {
         GetWindow<PlayerAnimatorSetup>("Player Animator Setup");

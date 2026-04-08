@@ -74,6 +74,15 @@ MonoBehaviour:
   rotationSpeed: 0
   bobSpeed: 0
   bobHeight: 0
+  outlineProximityDistance: 5
+  outlineColor: {r: 1, g: 1, b: 0, a: 1}
+  outlineIntensity: 2
+  outlineTransitionSpeed: 5
+  pulsationSpeed: 1
+  maxPulsationIntensity: 0.15
+  proximityCheckInterval: 0.2
+  sharedPlayerRefreshInterval: 0.5
+  enableDebugLogs: 0
   audioSource: {fileID: 0}
   pickupSound: {fileID: 0}
 --- !u!114 &3753503250626231775

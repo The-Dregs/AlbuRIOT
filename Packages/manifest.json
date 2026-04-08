@@ -1,6 +1,7 @@
 {
   "dependencies": {
-    "com.coplaydev.unity-mcp": "https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity",
+    "com.alexeyperov.unity-dependencies-hunter": "https://github.com/AlexeyPerov/Unity-Dependencies-Hunter.git#upm",
+    "com.ivanmurzak.unity.mcp": "0.51.6",
     "com.littlebigfun.addressable-importer": "0.16.1",
     "com.unity.2d.sprite": "1.0.0",
     "com.unity.ai.navigation": "2.0.9",
@@ -11,6 +12,7 @@
     "com.unity.ide.visualstudio": "2.0.25",
     "com.unity.inputsystem": "1.14.2",
     "com.unity.multiplayer.center": "1.0.0",
+    "com.unity.performance.profile-analyzer": "1.2.4",
     "com.unity.render-pipelines.universal": "17.2.0",
     "com.unity.terrain-tools": "5.3.1",
     "com.unity.test-framework": "1.6.0",

@@ -20,6 +20,19 @@ public class QuestListUI : MonoBehaviour
     [Tooltip("How often to refresh the HUD and resolve arrow target (seconds).")]
     [SerializeField] private float hudRefreshInterval = 0.5f;
 
+    [Header("HUD Pop Animation")]
+    [Tooltip("UI element that briefly scales when a quest completes. Defaults to the HUD title if not set.")]
+    [SerializeField] private RectTransform hudPopTarget;
+    [Tooltip("How large the HUD briefly scales when a quest completes.")]
+    [SerializeField] private float hudPopScale = 1.1f;
+    [Tooltip("Total duration of the HUD pop animation in seconds.")]
+    [SerializeField] private float hudPopDuration = 0.25f;
+    [Tooltip("Curve used for the pop in/out interpolation (0-1 over half the duration).")]
+    [SerializeField] private AnimationCurve hudPopCurve = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
+
+    private Vector3 hudPopOriginalScale = Vector3.one;
+    private Coroutine hudPopCoroutine;
+
     [Header("Data Source (optional)")]
     public QuestManager questManagerOverride;
     private QuestManager qm;
@@ -30,6 +43,20 @@ public class QuestListUI : MonoBehaviour
     [Tooltip("If enabled, hides quest titles/descriptions and shows only the objectives list.")]
     public bool showObjectivesOnly = true;
 
+    [Header("Fonts")]
+    [Tooltip("Font asset applied to all quest list text (titles, descriptions, progress). Leave empty to keep prefab defaults.")]
+    [SerializeField] private TMP_FontAsset listFont;
+    [Tooltip("Optional font asset for status/progress text (e.g. IN PROGRESS / COMPLETED). If empty, uses listFont.")]
+    [SerializeField] private TMP_FontAsset statusFont;
+
+    [Header("Font Sizes")]
+    [Tooltip("Font size for quest titles in the list header rows.")]
+    [SerializeField] private float questTitleFontSize = 32f;
+    [Tooltip("Font size for quest descriptions in the list header rows.")]
+    [SerializeField] private float questDescriptionFontSize = 24f;
+    [Tooltip("Font size for objective rows (name and description).")]
+    [SerializeField] private float objectiveTextFontSize = 18f;
+
     private Transform playerTransform;
     private Transform hudTarget;
     private float hudRefreshTimer;
@@ -37,7 +64,7 @@ public class QuestListUI : MonoBehaviour
     void Start()
     {
         if (panel != null) panel.SetActive(false);
-        qm = FindFirstObjectByType<QuestManager>();
+        qm = QuestManager.Instance ?? FindFirstObjectByType<QuestManager>();
         WireRowPrefabIfMissing();
         // auto-create a minimal UI if not wired
         if (panel == null)
@@ -47,10 +74,32 @@ public class QuestListUI : MonoBehaviour
         }
         EnsureListLayout();
         
+        // default HUD pop target to the HUD title's parent (full HUD container) if not assigned
+        if (hudPopTarget == null && hudObjectiveTitle != null)
+        {
+            var parentRt = hudObjectiveTitle.transform.parent as RectTransform;
+            hudPopTarget = parentRt != null ? parentRt : hudObjectiveTitle.rectTransform;
+        }
+        if (hudPopTarget != null)
+            hudPopOriginalScale = hudPopTarget.localScale;
+        
         var cam = Camera.main;
         if (cam != null && cam.transform.parent != null) playerTransform = cam.transform.parent;
         if (playerTransform == null && cam != null) playerTransform = cam.transform;
         SubscribeToQuestEvents();
+        
+        // Delayed refresh to catch quests that load after Start()
+        StartCoroutine(DelayedInitialRefresh());
+    }
+    
+    private System.Collections.IEnumerator DelayedInitialRefresh()
+    {
+        yield return new WaitForSeconds(0.5f);
+        if (qm == null) qm = QuestManager.Instance ?? FindFirstObjectByType<QuestManager>();
+        if (qm != null && panel != null && panel.activeInHierarchy)
+        {
+            Refresh();
+        }
     }
 
     void OnDisable()
@@ -68,21 +117,40 @@ public class QuestListUI : MonoBehaviour
         {
             bool open = panel != null && !panel.activeSelf;
             var ui = LocalUIManager.Ensure();
-            if (open)
-            {
-                // enforce strict exclusivity: do not open if any other UI is open
-                if (ui.IsAnyOpen && !ui.IsOwner("QuestList")) {
-                    Debug.LogWarning("[questlist] cannot open: another UI is already open");
-                    return;
+                if (open)
+                {
+                    // enforce strict exclusivity: do not open if any other UI is open
+                    if (ui.IsAnyOpen && !ui.IsOwner("QuestList")) {
+                        Debug.LogWarning("[QuestListUI] Cannot open: another UI is already open");
+                        return;
+                    }
+                    if (!ui.TryOpen("QuestList")) 
+                    {
+                        Debug.LogWarning("[QuestListUI] TryOpen failed");
+                        return;
+                    }
+                    if (panel == null)
+                    {
+                        Debug.LogError("[QuestListUI] Panel is null! Cannot open quest list.");
+                        return;
+                    }
+                    panel.SetActive(true);
+                    if (disableWhileOpen != null) disableWhileOpen.SetActive(false);
+                    // Refresh quest manager reference before refreshing
+                    if (qm == null) qm = QuestManager.Instance ?? FindFirstObjectByType<QuestManager>();
+                    if (qm == null)
+                    {
+                        Debug.LogError("[QuestListUI] QuestManager not found! Cannot display quests.");
+                        ShowNoQuestManagerMessage();
+                    }
+                    else
+                    {
+                        Refresh();
+                    }
+                    // partial lock: allow movement, lock combat and camera, unlock cursor
+                    if (_inputLockToken == 0)
+                        _inputLockToken = LocalInputLocker.Ensure().Acquire("QuestList", lockMovement:false, lockCombat:true, lockCamera:true, cursorUnlock:true);
                 }
-                if (!ui.TryOpen("QuestList")) return;
-                if (panel != null) panel.SetActive(true);
-                if (disableWhileOpen != null) disableWhileOpen.SetActive(false);
-                Refresh();
-                // partial lock: allow movement, lock combat and camera, unlock cursor
-                if (_inputLockToken == 0)
-                    _inputLockToken = LocalInputLocker.Ensure().Acquire("QuestList", lockMovement:false, lockCombat:true, lockCamera:true, cursorUnlock:true);
-            }
             else
             {
                 // avoid disabling ourselves if the panel is the same GameObject this script is on
@@ -116,78 +184,189 @@ public class QuestListUI : MonoBehaviour
     public void Refresh()
     {
         if (questManagerOverride != null) qm = questManagerOverride;
+        if (qm == null) qm = QuestManager.Instance;
         if (qm == null) qm = FindFirstObjectByType<QuestManager>();
-        if (qm == null)
+        if (qm == null || listParent == null)
         {
-            var all = Object.FindObjectsByType<QuestManager>(FindObjectsInactive.Include, FindObjectsSortMode.None);
-            if (all != null && all.Length > 0) qm = all[0];
+            Debug.LogWarning("[QuestListUI] QuestManager or listParent is null");
+            ShowNoQuestManagerMessage();
+            return;
         }
-        if (qm == null || listParent == null) return;
 
         EnsureListLayout();
 
         foreach (Transform child in listParent)
             Destroy(child.gameObject);
 
-        if (qm.quests == null) { Debug.Log("QuestListUI: QuestManager.quests is null"); return; }
-        var current = qm.GetCurrentQuest();
-        if (current == null || current.objectives == null) { Debug.Log("QuestListUI: no current quest/objectives"); return; }
-        Debug.Log($"QuestListUI: rendering {current.objectives.Length} objectives for current quest {qm.currentQuestIndex}");
-
-        for (int i = 0; i < current.objectives.Length; i++)
+        if (qm.quests == null || qm.quests.Length == 0)
         {
-            var obj = current.objectives[i];
-            var row = Instantiate(rowPrefab, listParent);
-            EnsureRowLayout(row);
+            Debug.LogWarning("[QuestListUI] QuestManager.quests is null or empty. Quest count: " + (qm.quests == null ? "null" : "0"));
+            ShowNoQuestsMessage();
+            return;
+        }
 
-            TextMeshProUGUI nameText = null;
-            TextMeshProUGUI progressText = null;
-            TextMeshProUGUI descriptionText = null;
-            var nameTf = row.transform.Find("Name") ?? row.transform.Find("quest/Name");
-            var descTf = row.transform.Find("Description") ?? row.transform.Find("quest/Description");
-            var progTf = row.transform.Find("Progress")
-                         ?? row.transform.Find("right/Progress")
-                         ?? row.transform.Find("Right/Progress");
-            if (nameTf != null) nameText = nameTf.GetComponent<TextMeshProUGUI>();
-            if (descTf != null) descriptionText = descTf.GetComponent<TextMeshProUGUI>();
-            if (progTf != null) progressText = progTf.GetComponent<TextMeshProUGUI>();
-
-            // Fallback mapping if prefab uses different hierarchy
-            if (nameText == null || progressText == null)
+        // Sort quests: current quest first, then completed quests
+        var sortedQuests = new System.Collections.Generic.List<Quest>();
+        var currentQuest = qm.GetCurrentQuest();
+        
+        // Add current quest first if it exists
+        if (currentQuest != null && !currentQuest.isCompleted)
+        {
+            sortedQuests.Add(currentQuest);
+        }
+        
+        // Add all completed quests
+        for (int i = 0; i < qm.quests.Length; i++)
+        {
+            if (qm.quests[i] != null && qm.quests[i].isCompleted)
             {
-                var allTexts = row.GetComponentsInChildren<TextMeshProUGUI>(true);
-                Transform questContainer = row.transform.Find("quest");
-                if (nameText == null && allTexts.Length > 0) nameText = allTexts[0];
-                if (descriptionText == null && allTexts.Length > 1) descriptionText = allTexts[Mathf.Min(1, allTexts.Length - 1)];
-                if (progressText == null && allTexts.Length > 2) progressText = allTexts[allTexts.Length - 1];
+                sortedQuests.Add(qm.quests[i]);
+            }
+        }
+
+        if (sortedQuests.Count == 0)
+        {
+            ShowNoCurrentQuestMessage();
+            return;
+        }
+
+        Debug.Log($"[QuestListUI] Rendering {sortedQuests.Count} quests (current: {currentQuest?.questName ?? "none"})");
+
+        // Render each quest
+        foreach (var quest in sortedQuests)
+        {
+            bool isCurrentQuest = (quest == currentQuest && !quest.isCompleted);
+            string questStatus = isCurrentQuest ? "<color=yellow>IN PROGRESS</color>" : "<color=green>COMPLETED</color>";
+
+            // Show quest name header with status
+            var questHeaderRow = Instantiate(rowPrefab, listParent);
+            EnsureRowLayout(questHeaderRow);
+
+            TextMeshProUGUI headerNameText = null;
+            TextMeshProUGUI headerProgressText = null;
+            TextMeshProUGUI headerDescriptionText = null;
+            var headerNameTf = questHeaderRow.transform.Find("QuestName") ?? questHeaderRow.transform.Find("Name") ?? questHeaderRow.transform.Find("quest/QuestName") ?? questHeaderRow.transform.Find("quest/Name");
+            var headerDescTf = questHeaderRow.transform.Find("Description") ?? questHeaderRow.transform.Find("quest/Description");
+            var headerProgTf = questHeaderRow.transform.Find("Progress")
+                             ?? questHeaderRow.transform.Find("right/Progress")
+                             ?? questHeaderRow.transform.Find("Right/Progress");
+            if (headerNameTf != null) headerNameText = headerNameTf.GetComponent<TextMeshProUGUI>();
+            if (headerDescTf != null) headerDescriptionText = headerDescTf.GetComponent<TextMeshProUGUI>();
+            if (headerProgTf != null) headerProgressText = headerProgTf.GetComponent<TextMeshProUGUI>();
+
+            // Fallback mapping
+            if (headerNameText == null || headerProgressText == null)
+            {
+                var allTexts = questHeaderRow.GetComponentsInChildren<TextMeshProUGUI>(true);
+                if (headerNameText == null && allTexts.Length > 0) headerNameText = allTexts[0];
+                if (headerDescriptionText == null && allTexts.Length > 1) headerDescriptionText = allTexts[1];
+                if (headerProgressText == null && allTexts.Length > 2) headerProgressText = allTexts[allTexts.Length - 1];
             }
 
-            // Populate row with objective data
-            if (nameText != null)
+            if (headerNameText != null)
             {
-                bool complete = obj.IsMultiItemCollect() ? obj.IsMultiItemCollectComplete() : obj.IsCompleted;
-                string status = complete ? "<color=green>✓</color>" : (i == current.currentObjectiveIndex ? "<color=yellow>○</color>" : "");
-                nameText.text = string.IsNullOrEmpty(status) ? obj.objectiveName : ($"{status} {obj.objectiveName}");
+                headerNameText.text = quest.questName ?? "Unnamed Quest";
             }
-            if (descriptionText != null)
+            if (headerDescriptionText != null)
             {
-                string desc = obj.description ?? string.Empty;
-                // Append multi-item progress details if applicable
-                if (obj.IsMultiItemCollect() && obj.collectItemIds != null && obj.collectProgress != null && obj.collectQuantities != null)
+                string desc = quest.description ?? "";
+                headerDescriptionText.text = desc.TrimEnd('\n');
+            }
+
+            // Apply font sizes for the quest header row
+            if (headerNameText != null && questTitleFontSize > 0f)
+            {
+                headerNameText.fontSize = questTitleFontSize;
+            }
+            if (headerDescriptionText != null && questDescriptionFontSize > 0f)
+            {
+                headerDescriptionText.fontSize = questDescriptionFontSize;
+            }
+            if (headerProgressText != null)
+            {
+                headerProgressText.text = questStatus;
+            }
+
+            // Show objectives if they exist
+            if (quest.objectives != null && quest.objectives.Length > 0)
+            {
+                // Render each objective
+                for (int i = 0; i < quest.objectives.Length; i++)
                 {
-                    if (!string.IsNullOrEmpty(desc)) desc += "\n";
-                    for (int j = 0; j < obj.collectItemIds.Length && j < obj.collectProgress.Length && j < obj.collectQuantities.Length; j++)
+                    var obj = quest.objectives[i];
+                    var row = Instantiate(rowPrefab, listParent);
+                    EnsureRowLayout(row);
+
+                    TextMeshProUGUI nameText = null;
+                    TextMeshProUGUI progressText = null;
+                    TextMeshProUGUI descriptionText = null;
+                    var nameTf = row.transform.Find("QuestName") ?? row.transform.Find("Name") ?? row.transform.Find("quest/QuestName") ?? row.transform.Find("quest/Name");
+                    var descTf = row.transform.Find("Description") ?? row.transform.Find("quest/Description");
+                    var progTf = row.transform.Find("Progress")
+                                 ?? row.transform.Find("right/Progress")
+                                 ?? row.transform.Find("Right/Progress");
+                    if (nameTf != null) nameText = nameTf.GetComponent<TextMeshProUGUI>();
+                    if (descTf != null) descriptionText = descTf.GetComponent<TextMeshProUGUI>();
+                    if (progTf != null) progressText = progTf.GetComponent<TextMeshProUGUI>();
+
+                    // Fallback mapping if prefab uses different hierarchy
+                    if (nameText == null || progressText == null)
                     {
-                        desc += $"{obj.collectItemIds[j]}: {obj.collectProgress[j]}/{obj.collectQuantities[j]}\n";
+                        var allTexts = row.GetComponentsInChildren<TextMeshProUGUI>(true);
+                        if (nameText == null && allTexts.Length > 0) nameText = allTexts[0];
+                        if (descriptionText == null && allTexts.Length > 1) descriptionText = allTexts[Mathf.Min(1, allTexts.Length - 1)];
+                        if (progressText == null && allTexts.Length > 2) progressText = allTexts[allTexts.Length - 1];
+                    }
+
+                    // Populate row with objective data
+                    if (nameText != null)
+                    {
+                        bool objComplete = obj.IsMultiItemCollect() ? obj.IsMultiItemCollectComplete() : obj.IsCompleted;
+                        string status = objComplete ? "<color=green>✓</color>" : (isCurrentQuest && i == quest.currentObjectiveIndex ? "<color=yellow>○</color>" : "");
+                        nameText.text = string.IsNullOrEmpty(status) ? obj.objectiveName : ($"{status} {obj.objectiveName}");
+                        if (objectiveTextFontSize > 0f)
+                            nameText.fontSize = objectiveTextFontSize;
+                    }
+                    if (descriptionText != null)
+                    {
+                        string desc = obj.description ?? string.Empty;
+                        // Append multi-item progress details if applicable
+                        if (obj.IsMultiItemCollect() && obj.collectItemIds != null && obj.collectQuantities != null)
+                        {
+                            if (!string.IsNullOrEmpty(desc)) desc += "\n";
+                            for (int j = 0; j < obj.collectItemIds.Length && j < obj.collectQuantities.Length; j++)
+                            {
+                                int current = 0;
+                                if (obj.collectProgress != null && j < obj.collectProgress.Length)
+                                    current = obj.collectProgress[j];
+                                int required = obj.collectQuantities[j];
+                                desc += $"{obj.collectItemIds[j]}: {current}/{required}\n";
+                            }
+                        }
+                        descriptionText.text = desc.TrimEnd('\n');
+                        if (objectiveTextFontSize > 0f)
+                            descriptionText.fontSize = objectiveTextFontSize;
+                    }
+                    if (progressText != null)
+                    {
+                        bool objComplete = obj.IsMultiItemCollect() ? obj.IsMultiItemCollectComplete() : obj.IsCompleted;
+                        string progress = "";
+                        
+                        if (objComplete)
+                        {
+                            progress = "done";
+                        }
+                        else if (isCurrentQuest && i == quest.currentObjectiveIndex)
+                        {
+                            progress = obj.requiredCount > 1 ? $"{obj.currentCount}/{obj.requiredCount}" : "";
+                        }
+                        else
+                        {
+                            progress = obj.requiredCount > 1 ? $"{obj.currentCount}/{obj.requiredCount}" : "";
+                        }
+                        progressText.text = progress;
                     }
                 }
-                descriptionText.text = desc.TrimEnd('\n');
-            }
-            if (progressText != null)
-            {
-                bool complete = obj.IsMultiItemCollect() ? obj.IsMultiItemCollectComplete() : obj.IsCompleted;
-                string progress = obj.requiredCount > 1 ? $"{obj.currentCount}/{obj.requiredCount}" : (complete ? "done" : (i == current.currentObjectiveIndex ? "in progress" : ""));
-                progressText.text = progress;
             }
         }
     }
@@ -328,6 +507,9 @@ public class QuestListUI : MonoBehaviour
             var qle = questContainer.GetComponent<UnityEngine.UI.LayoutElement>() ?? questContainer.gameObject.AddComponent<UnityEngine.UI.LayoutElement>();
             qle.flexibleWidth = 1;
             qle.preferredWidth = 0;
+            var qfitter = questContainer.GetComponent<UnityEngine.UI.ContentSizeFitter>() ?? questContainer.gameObject.AddComponent<UnityEngine.UI.ContentSizeFitter>();
+            qfitter.verticalFit = UnityEngine.UI.ContentSizeFitter.FitMode.PreferredSize;
+            qfitter.horizontalFit = UnityEngine.UI.ContentSizeFitter.FitMode.Unconstrained;
         }
         if (nameTf != null)
         {
@@ -346,6 +528,27 @@ public class QuestListUI : MonoBehaviour
             var progLE = progTf.GetComponent<UnityEngine.UI.LayoutElement>() ?? progTf.gameObject.AddComponent<UnityEngine.UI.LayoutElement>();
             if (progLE.preferredWidth < 80f) progLE.preferredWidth = 120f;
             progLE.flexibleWidth = 0;
+        }
+        // ensure quest text wraps and grows vertically instead of overlapping other rows
+        var allTexts = row.GetComponentsInChildren<TextMeshProUGUI>(true);
+        foreach (var tmp in allTexts)
+        {
+            if (tmp == null) continue;
+            // normalize fonts so all quest rows use a consistent look
+            if (listFont != null)
+            {
+                bool isProgress = tmp.gameObject.name == "Progress" || tmp.transform.parent.name == "Progress";
+                if (isProgress && statusFont != null)
+                    tmp.font = statusFont;
+                else
+                    tmp.font = listFont;
+            }
+            tmp.enableWordWrapping = true;
+            tmp.overflowMode = TextOverflowModes.Truncate;
+            if (tmp.alignment == TextAlignmentOptions.Center || tmp.alignment == TextAlignmentOptions.MidlineLeft || tmp.alignment == TextAlignmentOptions.MidlineRight)
+            {
+                tmp.alignment = TextAlignmentOptions.TopLeft;
+            }
         }
     }
 
@@ -374,6 +577,7 @@ public class QuestListUI : MonoBehaviour
         qm.OnQuestStarted += OnQuestChanged;
         qm.OnQuestUpdated += OnQuestChanged;
         qm.OnQuestCompleted += OnQuestChanged;
+        qm.OnQuestCompleted += OnQuestCompletedHudPop;
         qm.OnObjectiveCompleted += OnQuestChanged;
         qm.OnObjectiveUpdated += OnQuestChanged;
     }
@@ -384,6 +588,7 @@ public class QuestListUI : MonoBehaviour
         qm.OnQuestStarted -= OnQuestChanged;
         qm.OnQuestUpdated -= OnQuestChanged;
         qm.OnQuestCompleted -= OnQuestChanged;
+        qm.OnQuestCompleted -= OnQuestCompletedHudPop;
         qm.OnObjectiveCompleted -= OnQuestChanged;
         qm.OnObjectiveUpdated -= OnQuestChanged;
     }
@@ -391,16 +596,77 @@ public class QuestListUI : MonoBehaviour
     private void OnQuestChanged(Quest _)
     {
         hudRefreshTimer = 0f;
+        if (panel != null && panel.activeInHierarchy)
+        {
+            Refresh();
+        }
     }
 
     private void OnQuestChanged(QuestObjective _)
     {
         hudRefreshTimer = 0f;
+        if (panel != null && panel.activeInHierarchy)
+        {
+            Refresh();
+        }
+    }
+
+    private void OnQuestCompletedHudPop(Quest quest)
+    {
+        if (quest == null) return;
+        PlayHudPop();
+    }
+
+    private void PlayHudPop()
+    {
+        if (hudPopTarget == null) return;
+        if (!isActiveAndEnabled) return;
+
+        if (hudPopCoroutine != null)
+            StopCoroutine(hudPopCoroutine);
+
+        hudPopCoroutine = StartCoroutine(HudPopRoutine());
+    }
+
+    private System.Collections.IEnumerator HudPopRoutine()
+    {
+        if (hudPopTarget == null)
+            yield break;
+
+        float duration = Mathf.Max(0.01f, hudPopDuration);
+        float half = duration * 0.5f;
+        Vector3 baseScale = hudPopOriginalScale;
+
+        float t = 0f;
+        while (t < half)
+        {
+            t += Time.unscaledDeltaTime;
+            float normalized = Mathf.Clamp01(t / half);
+            float eval = hudPopCurve != null ? hudPopCurve.Evaluate(normalized) : normalized;
+            float s = Mathf.Lerp(1f, hudPopScale, eval);
+            hudPopTarget.localScale = baseScale * s;
+            yield return null;
+        }
+
+        t = 0f;
+        while (t < half)
+        {
+            t += Time.unscaledDeltaTime;
+            float normalized = Mathf.Clamp01(t / half);
+            float eval = hudPopCurve != null ? hudPopCurve.Evaluate(normalized) : normalized;
+            float s = Mathf.Lerp(hudPopScale, 1f, eval);
+            hudPopTarget.localScale = baseScale * s;
+            yield return null;
+        }
+
+        hudPopTarget.localScale = baseScale;
+        hudPopCoroutine = null;
     }
 
     private void UpdateHudDisplay()
     {
         if (questManagerOverride != null && qm != questManagerOverride) qm = questManagerOverride;
+        if (qm == null) qm = QuestManager.Instance;
         if (qm == null)
         {
             if (hudObjectiveTitle != null) hudObjectiveTitle.text = "";
@@ -417,7 +683,12 @@ public class QuestListUI : MonoBehaviour
         var obj = current.GetCurrentObjective();
         if (obj != null)
         {
-            if (hudObjectiveTitle != null) hudObjectiveTitle.text = obj.objectiveName;
+            bool localCompleted = qm != null && qm.IsCurrentObjectiveLocallyCompleted();
+            if (hudObjectiveTitle != null)
+            {
+                string completedTag = localCompleted ? " <color=#7CFF7C>(completed)</color>" : "";
+                hudObjectiveTitle.text = (obj.objectiveName ?? string.Empty) + completedTag;
+            }
             if (hudObjectiveDescription != null)
             {
                 string desc = obj.description ?? "";
@@ -449,6 +720,7 @@ public class QuestListUI : MonoBehaviour
     private void ResolveHudTarget()
     {
         hudTarget = null;
+        if (qm == null) qm = QuestManager.Instance;
         if (qm == null) return;
         var q = qm.GetCurrentQuest();
         if (q == null || q.isCompleted) return;
@@ -457,15 +729,25 @@ public class QuestListUI : MonoBehaviour
         {
             switch (obj.objectiveType)
             {
-                case ObjectiveType.ReachArea: hudTarget = FindQuestAreaTransform(obj.targetId); return;
-                case ObjectiveType.TalkTo: hudTarget = FindNpcTransform(obj.targetId); return;
+                case ObjectiveType.ReachArea:
+                case ObjectiveType.FindArea:
+                    hudTarget = FindQuestAreaTransform(obj.targetId);
+                    return;
+                case ObjectiveType.TalkTo:
+                    hudTarget = FindNpcTransform(obj.targetId);
+                    return;
                 default: return;
             }
         }
         switch (q.objectiveType)
         {
-            case ObjectiveType.ReachArea: hudTarget = FindQuestAreaTransform(q.targetId); break;
-            case ObjectiveType.TalkTo: hudTarget = FindNpcTransform(q.targetId); break;
+            case ObjectiveType.ReachArea:
+            case ObjectiveType.FindArea:
+                hudTarget = FindQuestAreaTransform(q.targetId);
+                break;
+            case ObjectiveType.TalkTo:
+                hudTarget = FindNpcTransform(q.targetId);
+                break;
         }
     }
 
@@ -499,6 +781,169 @@ public class QuestListUI : MonoBehaviour
             }
         }
         return best;
+    }
+
+    private void ShowQuestWithNoObjectives(Quest quest)
+    {
+        if (listParent == null || rowPrefab == null)
+        {
+            // Fallback if no prefab
+            var msgGO = new GameObject("NoObjectivesMsg", typeof(RectTransform), typeof(TextMeshProUGUI));
+            msgGO.transform.SetParent(listParent, false);
+            var tmp = msgGO.GetComponent<TextMeshProUGUI>();
+            tmp.text = $"<color=yellow>Quest: {quest.questName}</color>\n<color=red>No objectives defined</color>";
+            tmp.fontSize = 18f;
+            tmp.alignment = TextAlignmentOptions.Center;
+            var rt = msgGO.GetComponent<RectTransform>();
+            rt.anchorMin = new Vector2(0, 1);
+            rt.anchorMax = new Vector2(1, 1);
+            rt.sizeDelta = new Vector2(0, 60f);
+            return;
+        }
+
+        var row = Instantiate(rowPrefab, listParent);
+        EnsureRowLayout(row);
+
+        TextMeshProUGUI nameText = null;
+        TextMeshProUGUI progressText = null;
+        TextMeshProUGUI descriptionText = null;
+        var nameTf = row.transform.Find("QuestName") ?? row.transform.Find("Name") ?? row.transform.Find("quest/QuestName") ?? row.transform.Find("quest/Name");
+        var descTf = row.transform.Find("Description") ?? row.transform.Find("quest/Description");
+        var progTf = row.transform.Find("Progress") ?? row.transform.Find("right/Progress") ?? row.transform.Find("Right/Progress");
+        
+        if (nameTf != null) nameText = nameTf.GetComponent<TextMeshProUGUI>();
+        if (descTf != null) descriptionText = descTf.GetComponent<TextMeshProUGUI>();
+        if (progTf != null) progressText = progTf.GetComponent<TextMeshProUGUI>();
+
+        // Fallback: find all TMP texts if specific paths don't work
+        if (nameText == null || descriptionText == null)
+        {
+            var allTexts = row.GetComponentsInChildren<TextMeshProUGUI>(true);
+            if (nameText == null && allTexts.Length > 0) nameText = allTexts[0];
+            if (descriptionText == null && allTexts.Length > 1) descriptionText = allTexts[1];
+            if (progressText == null && allTexts.Length > 2) progressText = allTexts[allTexts.Length - 1];
+        }
+
+        if (nameText != null)
+        {
+            nameText.text = quest.questName ?? "Unnamed Quest";
+        }
+        if (descriptionText != null)
+        {
+            string desc = quest.description ?? "";
+            if (!string.IsNullOrEmpty(desc)) desc += "\n";
+            desc += "<color=red>No objectives defined</color>";
+            descriptionText.text = desc;
+        }
+        if (progressText != null)
+        {
+            progressText.text = "-";
+        }
+    }
+
+    private void ShowNoQuestManagerMessage()
+    {
+        if (listParent == null) return;
+        if (rowPrefab != null)
+        {
+            var row = Instantiate(rowPrefab, listParent);
+            EnsureRowLayout(row);
+            var allTexts = row.GetComponentsInChildren<TextMeshProUGUI>(true);
+            if (allTexts.Length > 0)
+            {
+                if (listFont != null) allTexts[0].font = listFont;
+                allTexts[0].text = "<color=yellow>Quest Manager not found</color>";
+            }
+            if (allTexts.Length > 1)
+            {
+                if (listFont != null) allTexts[1].font = listFont;
+                allTexts[1].text = "Please ensure QuestManager exists in the scene.";
+            }
+            if (allTexts.Length > 2) allTexts[2].text = "";
+            return;
+        }
+        // Fallback
+        var msgGO = new GameObject("NoQuestManagerMsg", typeof(RectTransform), typeof(TextMeshProUGUI));
+        msgGO.transform.SetParent(listParent, false);
+        var tmp = msgGO.GetComponent<TextMeshProUGUI>();
+        if (listFont != null) tmp.font = listFont;
+        tmp.text = "<color=yellow>Quest Manager not found</color>\nPlease ensure QuestManager exists in the scene.";
+        tmp.fontSize = 18f;
+        tmp.alignment = TextAlignmentOptions.Center;
+        var rt = msgGO.GetComponent<RectTransform>();
+        rt.anchorMin = new Vector2(0, 1);
+        rt.anchorMax = new Vector2(1, 1);
+        rt.sizeDelta = new Vector2(0, 60f);
+    }
+
+    private void ShowNoQuestsMessage()
+    {
+        if (listParent == null) return;
+        if (rowPrefab != null)
+        {
+            var row = Instantiate(rowPrefab, listParent);
+            EnsureRowLayout(row);
+            var allTexts = row.GetComponentsInChildren<TextMeshProUGUI>(true);
+            if (allTexts.Length > 0)
+            {
+                if (listFont != null) allTexts[0].font = listFont;
+                allTexts[0].text = "<color=yellow>No quests available</color>";
+            }
+            if (allTexts.Length > 1)
+            {
+                if (listFont != null) allTexts[1].font = listFont;
+                allTexts[1].text = "Quests will appear here when they are loaded.";
+            }
+            if (allTexts.Length > 2) allTexts[2].text = "";
+            return;
+        }
+        // Fallback
+        var msgGO = new GameObject("NoQuestsMsg", typeof(RectTransform), typeof(TextMeshProUGUI));
+        msgGO.transform.SetParent(listParent, false);
+        var tmp = msgGO.GetComponent<TextMeshProUGUI>();
+        if (listFont != null) tmp.font = listFont;
+        tmp.text = "<color=yellow>No quests available</color>\nQuests will appear here when they are loaded.";
+        tmp.fontSize = 18f;
+        tmp.alignment = TextAlignmentOptions.Center;
+        var rt = msgGO.GetComponent<RectTransform>();
+        rt.anchorMin = new Vector2(0, 1);
+        rt.anchorMax = new Vector2(1, 1);
+        rt.sizeDelta = new Vector2(0, 60f);
+    }
+
+    private void ShowNoCurrentQuestMessage()
+    {
+        if (listParent == null) return;
+        if (rowPrefab != null)
+        {
+            var row = Instantiate(rowPrefab, listParent);
+            EnsureRowLayout(row);
+            var allTexts = row.GetComponentsInChildren<TextMeshProUGUI>(true);
+            if (allTexts.Length > 0)
+            {
+                if (listFont != null) allTexts[0].font = listFont;
+                allTexts[0].text = "<color=yellow>No active quest</color>";
+            }
+            if (allTexts.Length > 1)
+            {
+                if (listFont != null) allTexts[1].font = listFont;
+                allTexts[1].text = "Start a quest to see objectives here.";
+            }
+            if (allTexts.Length > 2) allTexts[2].text = "";
+            return;
+        }
+        // Fallback
+        var msgGO = new GameObject("NoCurrentQuestMsg", typeof(RectTransform), typeof(TextMeshProUGUI));
+        msgGO.transform.SetParent(listParent, false);
+        var tmp = msgGO.GetComponent<TextMeshProUGUI>();
+        if (listFont != null) tmp.font = listFont;
+        tmp.text = "<color=yellow>No active quest</color>\nStart a quest to see objectives here.";
+        tmp.fontSize = 18f;
+        tmp.alignment = TextAlignmentOptions.Center;
+        var rt = msgGO.GetComponent<RectTransform>();
+        rt.anchorMin = new Vector2(0, 1);
+        rt.anchorMax = new Vector2(1, 1);
+        rt.sizeDelta = new Vector2(0, 60f);
     }
 
 }

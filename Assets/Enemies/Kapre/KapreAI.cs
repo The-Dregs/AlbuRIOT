@@ -8,6 +8,17 @@ using System.Collections.Generic;
 [DisallowMultipleComponent]
 public class KapreAI : BaseEnemyAI
 {
+    private const string SfxEventVanishWindup = "vanish_windup";
+    private const string SfxEventVanishImpact = "vanish_impact";
+    private const string SfxEventTreeSlamWindup = "treeslam_windup";
+    private const string SfxEventTreeSlamImpact = "treeslam_impact";
+
+    [Header("Basic Attack")]
+    [Tooltip("How long locked (exhausted) after a basic attack. If 0, skips exhausted; if < 0, uses Stoppage + Recovery.")]
+    public float basicAttackExhaustedTime = -1f;
+    public float basicAttackStoppageTime = 0.8f;
+    public float basicAttackRecoveryTime = 0f;
+
     [Header("Smoke Vanish → Strike")]
     public int vanishStrikeDamage = 30;
     public float vanishStrikeRadius = 1.6f;
@@ -21,7 +32,9 @@ public class KapreAI : BaseEnemyAI
     public Vector3 vanishImpactVFXOffset = Vector3.zero;
     public float vanishImpactVFXScale = 1.0f;
     public AudioClip vanishWindupSFX;
+    [Range(0f, 1f)] public float vanishWindupSfxVolume = 1f;
     public AudioClip vanishImpactSFX;
+    [Range(0f, 1f)] public float vanishImpactSfxVolume = 1f;
     public string vanishWindupTrigger = "VanishWindup";
     public string vanishMainTrigger = "VanishMain";
 
@@ -40,7 +53,9 @@ public class KapreAI : BaseEnemyAI
     public Vector3 treeSlamImpactVFXOffset = Vector3.zero;
     public float treeSlamImpactVFXScale = 1.0f;
     public AudioClip treeSlamWindupSFX;
+    [Range(0f, 1f)] public float treeSlamWindupSfxVolume = 1f;
     public AudioClip treeSlamImpactSFX;
+    [Range(0f, 1f)] public float treeSlamImpactSfxVolume = 1f;
     public string treeSlamWindupTrigger = "TreeSlamWindup";
     public string treeSlamMainTrigger = "TreeSlamMain";
 
@@ -48,32 +63,38 @@ public class KapreAI : BaseEnemyAI
     public float vanishPreferredMinDistance = 2f;
     public float vanishPreferredMaxDistance = 7f;
     [Range(0f, 1f)] public float vanishSkillWeight = 0.7f;
+    [Tooltip("How long locked (exhausted) after Vanish. If 0, skips exhausted; if < 0, uses Stoppage + Recovery.")]
+    public float vanishExhaustedTime = -1f;
     public float vanishStoppageTime = 1f;
     public float vanishRecoveryTime = 0.5f;
     public float treeSlamPreferredMinDistance = 3f;
     public float treeSlamPreferredMaxDistance = 9f;
     [Range(0f, 1f)] public float treeSlamSkillWeight = 0.8f;
+    [Tooltip("How long locked (exhausted) after Tree Slam. If 0, skips exhausted; if < 0, uses Stoppage + Recovery.")]
+    public float treeSlamExhaustedTime = -1f;
     public float treeSlamStoppageTime = 1f;
     public float treeSlamRecoveryTime = 0.5f;
 
     // Runtime state
     private float lastVanishTime = -9999f;
     private float lastTreeSlamTime = -9999f;
-    private float lastAnySkillRecoveryEnd = -9999f;
-    private float lastAnySkillRecoveryStart = -9999f;
-    private AudioSource audioSource;
     private Coroutine activeAbility;
     private Coroutine basicRoutine;
+    private bool isExhausted = false;
     
     // Debug accessors
     public float VanishCooldownRemaining => Mathf.Max(0f, vanishCooldown - (Time.time - lastVanishTime));
     public float TreeSlamCooldownRemaining => Mathf.Max(0f, treeSlamCooldown - (Time.time - lastTreeSlamTime));
 
-    protected override void InitializeEnemy()
+    public override string GetEffectiveStateForDebug()
     {
-        audioSource = GetComponent<AudioSource>();
-        if (audioSource == null) audioSource = gameObject.AddComponent<AudioSource>();
+        if (activeAbility != null) return currentSkillName ?? "Special";
+        if (basicRoutine != null) return "BasicAttack";
+        return base.GetEffectiveStateForDebug();
     }
+    private string currentSkillName;
+
+    protected override void InitializeEnemy() { }
 
     protected override void BuildBehaviorTree()
     {
@@ -81,12 +102,13 @@ public class KapreAI : BaseEnemyAI
         var hasTarget = new ConditionNode(blackboard, HasTarget, "has_target");
         var targetInDetection = new ConditionNode(blackboard, TargetInDetectionRange, "in_detect_range");
         var moveToTarget = new ActionNode(blackboard, MoveTowardsTarget, "move_to_target");
-        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRange, "in_attack_range");
+        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRangeAndFacing, "in_attack_range_facing");
         var basicAttack = new ActionNode(blackboard, () => { PerformBasicAttack(); return NodeState.Success; }, "basic");
         var canVanish = new ConditionNode(blackboard, CanVanishStrike, "can_vanish");
         var doVanish = new ActionNode(blackboard, () => { StartVanishStrike(); return NodeState.Success; }, "vanish");
         var canTreeSlam = new ConditionNode(blackboard, CanTreeSlam, "can_treeslam");
         var doTreeSlam = new ActionNode(blackboard, () => { StartTreeSlam(); return NodeState.Success; }, "treeslam");
+        var exhaustedGate = new ActionNode(blackboard, () => isExhausted ? NodeState.Running : NodeState.Success, "exhausted_gate");
 
         behaviorTree = new Selector(blackboard, "root")
             .Add(
@@ -94,6 +116,7 @@ public class KapreAI : BaseEnemyAI
                     updateTarget,
                     hasTarget,
                     targetInDetection,
+                    exhaustedGate,
                     new Selector(blackboard, "attack_opts").Add(
                         new Sequence(blackboard, "vanish_seq").Add(canVanish, doVanish),
                         new Sequence(blackboard, "treeslam_seq").Add(canTreeSlam, doTreeSlam),
@@ -105,10 +128,40 @@ public class KapreAI : BaseEnemyAI
             );
     }
 
+    private void PlayKapreAbilitySfxSynced(string eventKey, AudioClip clip, float volume)
+    {
+        float clampedVolume = Mathf.Clamp01(volume);
+        PlaySfx(clip, clampedVolume);
+        if (photonView != null && PhotonNetwork.IsConnected && !PhotonNetwork.OfflineMode)
+            photonView.RPC(nameof(RPC_PlayKapreAbilitySfx), RpcTarget.Others, eventKey, clampedVolume);
+    }
+
+    [PunRPC]
+    private void RPC_PlayKapreAbilitySfx(string eventKey, float volume)
+    {
+        float clampedVolume = Mathf.Clamp01(volume);
+        switch (eventKey)
+        {
+            case SfxEventVanishWindup:
+                PlaySfx(vanishWindupSFX, clampedVolume);
+                break;
+            case SfxEventVanishImpact:
+                PlaySfx(vanishImpactSFX, clampedVolume);
+                break;
+            case SfxEventTreeSlamWindup:
+                PlaySfx(treeSlamWindupSFX, clampedVolume);
+                break;
+            case SfxEventTreeSlamImpact:
+                PlaySfx(treeSlamImpactSFX, clampedVolume);
+                break;
+        }
+    }
+
     protected override void PerformBasicAttack()
     {
         if (basicRoutine != null) return;
         if (activeAbility != null) return;
+        if (isExhausted) return;
         if (isBusy || globalBusyTimer > 0f) return;
         if (enemyData == null) return;
         if (Time.time - lastAttackTime < enemyData.attackCooldown) return;
@@ -122,29 +175,30 @@ public class KapreAI : BaseEnemyAI
     private IEnumerator CoBasicAttack(Transform target)
     {
         BeginAction(AIState.BasicAttack);
+        Quaternion lockedRotation = transform.rotation;
         
-        // Windup animation trigger
-        if (animator != null)
-        {
-            if (HasTrigger(attackWindupTrigger))
-                animator.SetTrigger(attackWindupTrigger);
-            else if (HasTrigger(attackTrigger))
-                animator.SetTrigger(attackTrigger);
-        }
+        // Windup animation trigger (sync to network)
+        if (HasTrigger(attackWindupTrigger))
+            SetTriggerSync(attackWindupTrigger);
+        else if (HasTrigger(attackTrigger))
+            SetTriggerSync(attackTrigger);
+        PlayAttackWindupSfx();
 
-        // Windup phase - freeze movement during windup
+        // Windup phase - lock position and rotation
         float windup = Mathf.Max(0f, enemyData.attackWindup);
         while (windup > 0f)
         {
             windup -= Time.deltaTime;
+            transform.rotation = lockedRotation;
             if (controller != null && controller.enabled) 
                 controller.SimpleMove(Vector3.zero);
             yield return null;
         }
 
-        // Impact animation trigger
-        if (animator != null && HasTrigger(attackImpactTrigger))
-            animator.SetTrigger(attackImpactTrigger);
+        // Impact animation trigger (sync to network)
+        if (HasTrigger(attackImpactTrigger))
+            SetTriggerSync(attackImpactTrigger);
+        PlayAttackImpactSfx();
 
         // Apply damage after windup
         float radius = Mathf.Max(0.8f, enemyData.attackRange);
@@ -153,28 +207,31 @@ public class KapreAI : BaseEnemyAI
         foreach (var c in cols)
         {
             var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null) ps.TakeDamage(enemyData.basicDamage);
+            if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, enemyData.basicDamage);
         }
 
-        // Post-stop using attackMoveLock duration
-        float post = Mathf.Max(0.1f, enemyData.attackMoveLock);
-        while (post > 0f)
-        {
-            post -= Time.deltaTime;
-            if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
-            yield return null;
-        }
+        float basicExhaustedTotal = GetExhaustedDuration(basicAttackExhaustedTime, basicAttackStoppageTime, basicAttackRecoveryTime);
+        attackLockTimer = Mathf.Max(enemyData.attackMoveLock, basicExhaustedTotal);
+
+        EndAction();
+
+        isExhausted = true;
+        if (HasBool("Exhausted")) SetBoolSync("Exhausted", true);
+        yield return RunExhaustedPhase(lockedRotation, basicAttackExhaustedTime, basicAttackStoppageTime, basicAttackRecoveryTime);
+        if (HasBool("Exhausted")) SetBoolSync("Exhausted", false);
+        isExhausted = false;
 
         lastAttackTime = Time.time;
-        attackLockTimer = enemyData.attackMoveLock;
         basicRoutine = null;
-        EndAction();
+        if (basicExhaustedTotal > 0f)
+            globalBusyTimer = Mathf.Max(globalBusyTimer, basicExhaustedTotal);
     }
 
     protected override bool TrySpecialAbilities()
     {
         if (activeAbility != null) return false;
         if (basicRoutine != null) return false;
+        if (isExhausted) return false;
         if (isBusy) return false;
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
@@ -195,9 +252,9 @@ public class KapreAI : BaseEnemyAI
     {
         if (activeAbility != null) return false;
         if (basicRoutine != null) return false;
+        if (isExhausted) return false;
         if (isBusy || globalBusyTimer > 0f) return false;
         if (Time.time - lastVanishTime < vanishCooldown) return false;
-        if (Time.time - lastAnySkillRecoveryEnd < 4f) return false;
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
         return Vector3.Distance(transform.position, target.position) <= enemyData.detectionRange;
@@ -213,6 +270,7 @@ public class KapreAI : BaseEnemyAI
         Vector3 capturedPos = target != null ? target.position : transform.position;
         Vector3 capturedForward = target != null ? target.forward : Vector3.forward;
         
+        currentSkillName = "VanishStrike";
         activeAbility = StartCoroutine(CoVanishStrike(capturedPos, capturedForward));
     }
 
@@ -220,11 +278,10 @@ public class KapreAI : BaseEnemyAI
     {
         BeginAction(AIState.Special1);
         
-        // Windup phase - separate trigger, VFX, and SFX
-        if (animator != null && HasTrigger(vanishWindupTrigger))
-            animator.SetTrigger(vanishWindupTrigger);
-        if (audioSource != null && vanishWindupSFX != null) 
-            audioSource.PlayOneShot(vanishWindupSFX);
+        // Windup phase - separate trigger, VFX, and SFX (sync to network)
+        if (HasTrigger(vanishWindupTrigger))
+            SetTriggerSync(vanishWindupTrigger);
+        PlayKapreAbilitySfxSynced(SfxEventVanishWindup, vanishWindupSFX, vanishWindupSfxVolume);
         GameObject wind = null;
         if (vanishWindupVFX != null)
         {
@@ -267,9 +324,9 @@ public class KapreAI : BaseEnemyAI
         if (dir.sqrMagnitude > 0.0001f)
             transform.rotation = Quaternion.LookRotation(dir.normalized);
         
-        // Impact phase - separate trigger, VFX, and SFX
-        if (animator != null && HasTrigger(vanishMainTrigger))
-            animator.SetTrigger(vanishMainTrigger);
+        // Impact phase - separate trigger, VFX, and SFX (sync to network)
+        if (HasTrigger(vanishMainTrigger))
+            SetTriggerSync(vanishMainTrigger);
             
         if (vanishImpactVFX != null)
         {
@@ -277,72 +334,38 @@ public class KapreAI : BaseEnemyAI
             fx.transform.localPosition = vanishImpactVFXOffset;
             if (vanishImpactVFXScale > 0f) fx.transform.localScale = Vector3.one * vanishImpactVFXScale;
         }
-        if (audioSource != null && vanishImpactSFX != null) audioSource.PlayOneShot(vanishImpactSFX);
+        PlayKapreAbilitySfxSynced(SfxEventVanishImpact, vanishImpactSFX, vanishImpactSfxVolume);
 
         var cols = Physics.OverlapSphere(transform.position, vanishStrikeRadius, LayerMask.GetMask("Player"));
         foreach (var c in cols)
         {
             var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null) ps.TakeDamage(vanishStrikeDamage);
+        if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, vanishStrikeDamage);
         }
 
-        // Stoppage recovery (AI frozen after attack)
-        if (vanishStoppageTime > 0f)
-        {
-            float stopTimer = vanishStoppageTime;
-            float quarterStoppage = vanishStoppageTime * 0.75f;
-            
-            while (stopTimer > 0f)
-            {
-                stopTimer -= Time.deltaTime;
-                if (controller != null && controller.enabled)
-                    controller.SimpleMove(Vector3.zero);
-                
-                // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
-                if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
-                {
-                    animator.SetBool("Exhausted", true);
-                }
-                
-                yield return null;
-            }
-            
-            // Clear Exhausted boolean parameter
-            if (animator != null) animator.SetBool("Exhausted", false);
-        }
-
-        // End busy state so AI can move during recovery
+        float exhaustedTotal = GetExhaustedDuration(vanishExhaustedTime, vanishStoppageTime, vanishRecoveryTime);
         EndAction();
 
-        // Recovery time (AI can move but skill still on cooldown, gradual speed recovery)
-        if (vanishRecoveryTime > 0f)
-        {
-            lastAnySkillRecoveryStart = Time.time;
-            float recovery = vanishRecoveryTime;
-            while (recovery > 0f)
-            {
-                recovery -= Time.deltaTime;
-                // AI can move during recovery - no movement freeze
-                yield return null;
-            }
-            lastAnySkillRecoveryEnd = Time.time;
-        }
-        else
-        {
-            lastAnySkillRecoveryEnd = Time.time;
-        }
+        isExhausted = true;
+        if (HasBool("Exhausted")) SetBoolSync("Exhausted", true);
+        yield return RunExhaustedPhase(transform.rotation, vanishExhaustedTime, vanishStoppageTime, vanishRecoveryTime);
+        if (HasBool("Exhausted")) SetBoolSync("Exhausted", false);
+        isExhausted = false;
 
         activeAbility = null;
+        currentSkillName = null;
         lastVanishTime = Time.time;
+        if (exhaustedTotal > 0f)
+            globalBusyTimer = Mathf.Max(globalBusyTimer, exhaustedTotal);
     }
 
     private bool CanTreeSlam()
     {
         if (activeAbility != null) return false;
         if (basicRoutine != null) return false;
+        if (isExhausted) return false;
         if (isBusy || globalBusyTimer > 0f) return false;
         if (Time.time - lastTreeSlamTime < treeSlamCooldown) return false;
-        if (Time.time - lastAnySkillRecoveryEnd < 4f) return false;
         var target = blackboard.Get<Transform>("target");
         return target != null;
     }
@@ -351,6 +374,7 @@ public class KapreAI : BaseEnemyAI
     {
         if (activeAbility != null) return;
         if (enemyData != null) lastAttackTime = Time.time;
+        currentSkillName = "TreeSlam";
         activeAbility = StartCoroutine(CoTreeSlam());
     }
 
@@ -358,11 +382,10 @@ public class KapreAI : BaseEnemyAI
     {
         BeginAction(AIState.Special2);
         
-        // Windup phase - separate trigger, VFX, and SFX
-        if (animator != null && HasTrigger(treeSlamWindupTrigger))
-            animator.SetTrigger(treeSlamWindupTrigger);
-        if (audioSource != null && treeSlamWindupSFX != null) 
-            audioSource.PlayOneShot(treeSlamWindupSFX);
+        // Windup phase - separate trigger, VFX, and SFX (sync to network)
+        if (HasTrigger(treeSlamWindupTrigger))
+            SetTriggerSync(treeSlamWindupTrigger);
+        PlayKapreAbilitySfxSynced(SfxEventTreeSlamWindup, treeSlamWindupSFX, treeSlamWindupSfxVolume);
         GameObject wind = null;
         if (treeSlamWindupVFX != null)
         {
@@ -444,9 +467,9 @@ public class KapreAI : BaseEnemyAI
             transform.position = endPos;
         }
         
-        // Impact phase - separate trigger, VFX, and SFX
-        if (animator != null && HasTrigger(treeSlamMainTrigger))
-            animator.SetTrigger(treeSlamMainTrigger);
+        // Impact phase - separate trigger, VFX, and SFX (sync to network)
+        if (HasTrigger(treeSlamMainTrigger))
+            SetTriggerSync(treeSlamMainTrigger);
         
         if (treeSlamImpactVFX != null)
         {
@@ -455,65 +478,80 @@ public class KapreAI : BaseEnemyAI
             if (treeSlamImpactVFXScale > 0f) 
                 fx.transform.localScale = Vector3.one * treeSlamImpactVFXScale;
         }
-        if (audioSource != null && treeSlamImpactSFX != null) 
-            audioSource.PlayOneShot(treeSlamImpactSFX);
+        PlayKapreAbilitySfxSynced(SfxEventTreeSlamImpact, treeSlamImpactSFX, treeSlamImpactSfxVolume);
 
         // frontal AOE based on radius ahead
         var all = Physics.OverlapSphere(transform.position + transform.forward * (treeSlamRadius * 0.75f), treeSlamRadius, LayerMask.GetMask("Player"));
         foreach (var c in all)
         {
             var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null) ps.TakeDamage(treeSlamDamage);
+        if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, treeSlamDamage);
         }
 
-        // Stoppage recovery (AI frozen after attack)
-        if (treeSlamStoppageTime > 0f)
-        {
-            float stopTimer = treeSlamStoppageTime;
-            float quarterStoppage = treeSlamStoppageTime * 0.75f;
-            
-            while (stopTimer > 0f)
-            {
-                stopTimer -= Time.deltaTime;
-                if (controller != null && controller.enabled)
-                    controller.SimpleMove(Vector3.zero);
-                
-                // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
-                if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
-                {
-                    animator.SetBool("Exhausted", true);
-                }
-                
-                yield return null;
-            }
-            
-            // Clear Exhausted boolean parameter
-            if (animator != null) animator.SetBool("Exhausted", false);
-        }
-
-        // End busy state so AI can move during recovery
+        float exhaustedTotal = GetExhaustedDuration(treeSlamExhaustedTime, treeSlamStoppageTime, treeSlamRecoveryTime);
         EndAction();
 
-        // Recovery time (AI can move but skill still on cooldown, gradual speed recovery)
-        if (treeSlamRecoveryTime > 0f)
-        {
-            lastAnySkillRecoveryStart = Time.time;
-            float recovery = treeSlamRecoveryTime;
-            while (recovery > 0f)
-            {
-                recovery -= Time.deltaTime;
-                // AI can move during recovery - no movement freeze
-                yield return null;
-            }
-            lastAnySkillRecoveryEnd = Time.time;
-        }
-        else
-        {
-            lastAnySkillRecoveryEnd = Time.time;
-        }
+        isExhausted = true;
+        if (HasBool("Exhausted")) SetBoolSync("Exhausted", true);
+        yield return RunExhaustedPhase(transform.rotation, treeSlamExhaustedTime, treeSlamStoppageTime, treeSlamRecoveryTime);
+        if (HasBool("Exhausted")) SetBoolSync("Exhausted", false);
+        isExhausted = false;
 
         activeAbility = null;
+        currentSkillName = null;
         lastTreeSlamTime = Time.time;
+        if (exhaustedTotal > 0f)
+            globalBusyTimer = Mathf.Max(globalBusyTimer, exhaustedTotal);
+    }
+
+    private IEnumerator RunExhaustedPhase(Quaternion lockedRotation, float exhaustedTime, float stoppageTime, float recoveryTime)
+    {
+        if (exhaustedTime > 0f)
+        {
+            float t = exhaustedTime;
+            while (t > 0f)
+            {
+                t -= Time.deltaTime;
+                transform.rotation = lockedRotation;
+                if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+                yield return null;
+            }
+            yield break;
+        }
+
+        if (Mathf.Approximately(exhaustedTime, 0f))
+            yield break;
+
+        if (stoppageTime > 0f)
+        {
+            float t = stoppageTime;
+            while (t > 0f)
+            {
+                t -= Time.deltaTime;
+                transform.rotation = lockedRotation;
+                if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+                yield return null;
+            }
+        }
+
+        if (recoveryTime > 0f)
+        {
+            float t = recoveryTime;
+            while (t > 0f)
+            {
+                t -= Time.deltaTime;
+                transform.rotation = lockedRotation;
+                if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+                yield return null;
+            }
+        }
+    }
+
+    private float GetExhaustedDuration(float exhaustedTime, float stoppageTime, float recoveryTime)
+    {
+        if (exhaustedTime > 0f) return exhaustedTime;
+        if (Mathf.Approximately(exhaustedTime, 0f)) return 0f;
+        return Mathf.Max(0f, stoppageTime) + Mathf.Max(0f, recoveryTime);
     }
 
     private bool IsFacingTarget(Transform target, float maxAngle)
@@ -540,7 +578,7 @@ public class KapreAI : BaseEnemyAI
     protected override float GetMoveSpeed()
     {
         // Return 0 if AI is busy or has active ability (should be stopped)
-        if (isBusy || globalBusyTimer > 0f || activeAbility != null || basicRoutine != null)
+        if (isBusy || isExhausted || globalBusyTimer > 0f || activeAbility != null || basicRoutine != null)
         {
             return 0f;
         }
@@ -551,21 +589,6 @@ public class KapreAI : BaseEnemyAI
             return 0f;
         }
         
-        float baseSpeed = base.GetMoveSpeed();
-        
-        // If we're in recovery phase, gradually increase speed from 0.3 to 1.0
-        if (Time.time >= lastAnySkillRecoveryStart && Time.time <= lastAnySkillRecoveryEnd && lastAnySkillRecoveryStart >= 0f)
-        {
-            float recoveryDuration = lastAnySkillRecoveryEnd - lastAnySkillRecoveryStart;
-            if (recoveryDuration > 0f)
-            {
-                float elapsed = Time.time - lastAnySkillRecoveryStart;
-                float progress = Mathf.Clamp01(elapsed / recoveryDuration);
-                float speedMultiplier = Mathf.Lerp(0.3f, 1.0f, progress);
-                return baseSpeed * speedMultiplier;
-            }
-        }
-        
-        return baseSpeed;
+        return base.GetMoveSpeed();
     }
 }

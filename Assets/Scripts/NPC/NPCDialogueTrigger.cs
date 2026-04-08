@@ -34,6 +34,14 @@ public class NPCDialogueTrigger : MonoBehaviour
         return q.objectiveType == ObjectiveType.TalkTo && !string.IsNullOrEmpty(npcId) && string.Equals(q.targetId, npcId, System.StringComparison.OrdinalIgnoreCase);
     }
 
+    // returns true if the local player already completed this talk objective (waiting for others)
+    private bool HasLocalPlayerAlreadyTalked()
+    {
+        var qm = FindFirstObjectByType<QuestManager>();
+        if (qm == null) return false;
+        return qm.IsCurrentObjectiveLocallyCompleted();
+    }
+
     void OnTriggerEnter(Collider other)
     {
         var playerRoot = GetPlayerRoot(other);
@@ -45,7 +53,13 @@ public class NPCDialogueTrigger : MonoBehaviour
             if (!requireMatchingTalkObjective || IsTalkObjectiveActive())
             {
                 var hud = playerRoot.GetComponentInChildren<PlayerInteractHUD>(true);
-                if (hud != null)
+                // if already completed locally, show waiting status instead of interact prompt
+                if (requireMatchingTalkObjective && HasLocalPlayerAlreadyTalked())
+                {
+                    if (hud != null)
+                        hud.Show("Waiting for other players...");
+                }
+                else if (hud != null)
                 {
                     hud.Show("Press \"E\" to talk");
                 }
@@ -78,7 +92,13 @@ public class NPCDialogueTrigger : MonoBehaviour
         if (!requireMatchingTalkObjective || IsTalkObjectiveActive())
         {
             var hud = playerRoot.GetComponentInChildren<PlayerInteractHUD>(true);
-            if (hud != null)
+            // if already completed locally, show waiting status
+            if (requireMatchingTalkObjective && HasLocalPlayerAlreadyTalked())
+            {
+                if (hud != null && !(hud.gameObject.activeInHierarchy && hud.enabled))
+                    hud.Show("Waiting for other players...");
+            }
+            else if (hud != null)
             {
                 if (!(hud.gameObject.activeInHierarchy && hud.enabled)) hud.Show("Press \"E\" to talk");
             }
@@ -112,6 +132,12 @@ public class NPCDialogueTrigger : MonoBehaviour
             if (requireMatchingTalkObjective && !IsTalkObjectiveActive())
             {
                 Debug.Log($"interaction with npc {npcId} blocked: not current TalkTo objective");
+                return;
+            }
+            // block if local player already completed this talk objective (waiting for others)
+            if (requireMatchingTalkObjective && HasLocalPlayerAlreadyTalked())
+            {
+                Debug.Log($"interaction with npc {npcId} blocked: already completed, waiting for other players");
                 return;
             }
 
@@ -151,13 +177,8 @@ public class NPCDialogueTrigger : MonoBehaviour
 
     private GameObject FindLocalPlayer()
     {
-        var stats = Object.FindObjectsByType<PlayerStats>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
-        foreach (var s in stats)
-        {
-            var pv = s.GetComponent<Photon.Pun.PhotonView>();
-            if (pv == null) return s.gameObject; // offline
-            if (pv.IsMine) return s.gameObject;
-        }
+        var t = PlayerRegistry.GetLocalPlayerTransform();
+        if (t != null) return t.gameObject;
         return GameObject.FindGameObjectWithTag("Player");
     }
 

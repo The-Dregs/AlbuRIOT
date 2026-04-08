@@ -16,6 +16,7 @@ public class MovesetManager : MonoBehaviourPun
     
     [Header("VFX Integration")]
     public VFXManager vfxManager;
+    [SerializeField] private bool enableDebugLogs = false;
 
     [Header("UI References")]
     public TMPro.TextMeshProUGUI movesetNameText;
@@ -25,6 +26,8 @@ public class MovesetManager : MonoBehaviourPun
     public event Action<MovesetData> OnMovesetChanged;
     // power steal events centralized in PowerStealManager
     
+    private PowerStealManager cachedPowerStealManager;
+
     void Awake()
     {
         // Auto-find components
@@ -42,6 +45,11 @@ public class MovesetManager : MonoBehaviourPun
         {
             SetMoveset(availableMovesets[0]);
         }
+    }
+
+    void OnDestroy()
+    {
+        OnMovesetChanged = null;
     }
     
     void Update()
@@ -86,7 +94,7 @@ public class MovesetManager : MonoBehaviourPun
             playerStats.baseSpeed = moveset.baseSpeed;
         }
         
-        Debug.Log($"Moveset changed to: {moveset.movesetName}");
+        if (enableDebugLogs) Debug.Log($"Moveset changed to: {moveset.movesetName}");
         OnMovesetChanged?.Invoke(moveset);
         UpdateMovesetUI();
     }
@@ -104,14 +112,16 @@ public class MovesetManager : MonoBehaviourPun
     [Obsolete("Use PowerStealManager.StealPowerFromEnemy(enemyName, position) instead. This method will forward to the central manager.")]
     public void StealPowerFromEnemy(string enemyName)
     {
-        var psm = FindFirstObjectByType<PowerStealManager>();
+        if (cachedPowerStealManager == null)
+            cachedPowerStealManager = FindFirstObjectByType<PowerStealManager>();
+        var psm = cachedPowerStealManager;
         if (psm != null)
         {
             psm.StealPowerFromEnemy(enemyName, transform.position);
         }
         else
         {
-            Debug.LogWarning("MovesetManager.StealPowerFromEnemy called but no PowerStealManager found in scene.");
+            if (enableDebugLogs) Debug.LogWarning("MovesetManager.StealPowerFromEnemy called but no PowerStealManager found in scene.");
         }
     }
     
@@ -137,12 +147,12 @@ public class MovesetManager : MonoBehaviourPun
         // Check stamina cost
         if (!playerStats.UseStamina(move.staminaCost))
         {
-            Debug.Log("Not enough stamina for special move!");
+            if (enableDebugLogs) Debug.Log("Not enough stamina for special move!");
             return;
         }
         
         // Execute the move
-        Debug.Log($"Executing special move: {move.moveName}");
+        if (enableDebugLogs) Debug.Log($"Executing special move: {move.moveName}");
         
         // Play animation
         if (animator != null && !string.IsNullOrEmpty(move.animationTrigger))
@@ -218,7 +228,7 @@ public class MovesetManager : MonoBehaviourPun
     {
         // This would integrate with your existing status effect system
         // For now, just log the effect
-        Debug.Log($"Applied status effect: {effect.effectType} for {effect.duration} seconds");
+        if (enableDebugLogs) Debug.Log($"Applied status effect: {effect.effectType} for {effect.duration} seconds");
     }
     
     public MovesetData GetMovesetByName(string name)

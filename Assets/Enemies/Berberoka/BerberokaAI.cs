@@ -7,7 +7,16 @@ using System.Collections;
 [DisallowMultipleComponent]
 public class BerberokaAI : BaseEnemyAI
 {
-    // Organize all Berberoka fields with clear headers
+    [Header("Basic Attack")]
+    [Tooltip("How long locked (exhausted) after a basic attack. If 0, uses Stoppage + Recovery.")]
+    public float basicAttackExhaustedTime = 0.5f;
+    public float basicAttackStoppageTime = 0f;
+    public float basicAttackRecoveryTime = 0f;
+    [Tooltip("Camera shake for nearby players when basic attack hits (0 = none)")]
+    [Range(0f, 1f)] public float basicAttackCameraShakeIntensity = 0f;
+    [Range(0f, 0.5f)] public float basicAttackCameraShakeDuration = 0.1f;
+    public float basicAttackCameraShakeRadius = 8f;
+
     [Header("Water Vortex (DoT Pull)")]
     public int vortexTickDamage = 6;
     public float vortexTickInterval = 0.25f;
@@ -16,7 +25,10 @@ public class BerberokaAI : BaseEnemyAI
     public float vortexWindup = 0.6f;
     public float vortexCooldown = 10f;
     public float vortexPullStrength = 6f;
-    [Header("Vortex VFX/SFX")]
+    [Tooltip("How long locked (exhausted) after Vortex. If > 0, uses this; else uses Stoppage + Recovery.")]
+    public float vortexExhaustedTime = 0f;
+    public float vortexStoppageTime = 1f;
+    public float vortexRecoveryTime = 0.5f;
     public GameObject vortexWindupVFX;
     public GameObject vortexActiveVFX;
     public Vector3 vortexVFXOffset = Vector3.zero;
@@ -24,19 +36,25 @@ public class BerberokaAI : BaseEnemyAI
     public AudioClip vortexWindupSFX;
     public AudioClip vortexActiveSFX;
     public string vortexTrigger = "Vortex";
-    [Header("Vortex Indicator")]
+    [Tooltip("Camera shake for nearby players when vortex activates (0 = none)")]
+    [Range(0f, 1f)] public float vortexCameraShakeIntensity = 0.15f;
+    [Range(0f, 0.5f)] public float vortexCameraShakeDuration = 0.15f;
+    public float vortexCameraShakeRadius = 12f;
     public GameObject vortexIndicatorPrefab;
     public Vector3 vortexIndicatorOffset = new Vector3(0f, -0.1f, 0f);
     public Vector3 vortexIndicatorScale = new Vector3(3f, 1f, 3f);
     public bool vortexIndicatorRotate90X = true;
-    [SerializeField] private float vortexStoppageTime = 1f;
+
     [Header("Flood Crash (AoE + Projectile)")]
     public int floodCrashDamage = 35;
     [Range(0f,180f)] public float floodCrashConeAngle = 60f;
     public float floodCrashRange = 6.5f;
     public float floodCrashWindup = 0.5f;
     public float floodCrashCooldown = 8f;
-    [Header("Flood VFX/SFX")]
+    [Tooltip("How long locked (exhausted) after Flood Crash. If > 0, uses this; else uses Stoppage + Recovery.")]
+    public float floodExhaustedTime = 0f;
+    public float floodStoppageTime = 1f;
+    public float floodRecoveryTime = 0.5f;
     public GameObject floodWindupVFX;
     public GameObject floodImpactVFX;
     public Vector3 floodVFXOffset = Vector3.zero;
@@ -44,14 +62,15 @@ public class BerberokaAI : BaseEnemyAI
     public AudioClip floodWindupSFX;
     public AudioClip floodImpactSFX;
     public string floodTrigger = "Flood";
-    [Header("Flood Indicator")]
+    [Tooltip("Camera shake for nearby players when flood crash hits (0 = none)")]
+    [Range(0f, 1f)] public float floodCameraShakeIntensity = 0.15f;
+    [Range(0f, 0.5f)] public float floodCameraShakeDuration = 0.15f;
+    public float floodCameraShakeRadius = 10f;
     public GameObject floodIndicatorPrefab;
     public Vector3 floodIndicatorOffset = new Vector3(0f, -0.1f, 0f);
     public Vector3 floodIndicatorScale = new Vector3(3.5f, 1f, 3.5f);
     public bool floodIndicatorRotate90X = true;
-    [SerializeField] private float floodStoppageTime = 1f;
-    [Header("Flood Projectile")]
-    public GameObject floodProjectilePrefab;
+    public string floodProjectilePrefabPath = "Enemies/Projectiles/Flood Crash";
     public Vector3 floodProjectileSpawnOffset = new Vector3(0f,1f,1.5f);
     public float projectileSpeed = 14f;
     public float projectileLifetime = 2.5f;
@@ -68,15 +87,12 @@ public class BerberokaAI : BaseEnemyAI
 
     private float lastVortexTime = -9999f;
     private float lastFloodTime = -9999f;
-    private AudioSource audioSource;
     private bool vortexActive = false; // allow movement while active but block other specials
+    private bool isExhausted = false; // blocks all state transitions until exhausted phase ends
+    private Coroutine basicRoutine;
 
 
-    protected override void InitializeEnemy()
-    {
-        audioSource = GetComponent<AudioSource>();
-        if (audioSource == null) audioSource = gameObject.AddComponent<AudioSource>();
-    }
+    protected override void InitializeEnemy() { }
 
     protected override void BuildBehaviorTree()
     {
@@ -92,12 +108,14 @@ public class BerberokaAI : BaseEnemyAI
         var canFlood = new ConditionNode(blackboard, CanFloodCrash, "can_flood");
         var doFlood = new ActionNode(blackboard, () => { StartFloodCrash(); return NodeState.Success; }, "flood");
 
+        var exhaustedGate = new ActionNode(blackboard, () => isExhausted ? NodeState.Running : NodeState.Success, "exhausted_gate");
         behaviorTree = new Selector(blackboard, "root")
             .Add(
                 new Sequence(blackboard, "combat").Add(
                     updateTarget,
                     hasTarget,
                     targetInDetection,
+                    exhaustedGate,
                     maintainSpace,
                     new Selector(blackboard, "attack_opts").Add(
                         new Sequence(blackboard, "vortex_seq").Add(canVortex, doVortex),
@@ -112,6 +130,7 @@ public class BerberokaAI : BaseEnemyAI
 
     protected override void PerformBasicAttack()
     {
+        if (basicRoutine != null || isExhausted) return;
         if (enemyData == null) return;
         if (Time.time - lastAttackTime < enemyData.attackCooldown) return;
         var target = blackboard.Get<Transform>("target");
@@ -121,7 +140,34 @@ public class BerberokaAI : BaseEnemyAI
             FaceTarget(target);
             return; // wait until faced
         }
-        if (animator != null && HasTrigger(attackTrigger)) animator.SetTrigger(attackTrigger);
+        basicRoutine = StartCoroutine(CoBasicAttack(target));
+    }
+
+    private IEnumerator CoBasicAttack(Transform target)
+    {
+        BeginAction(AIState.BasicAttack);
+        Quaternion lockedRotation = transform.rotation;
+
+        // Windup phase
+        if (HasTrigger(attackWindupTrigger))
+            SetTriggerSync(attackWindupTrigger);
+        else if (HasTrigger(attackTrigger))
+            SetTriggerSync(attackTrigger);
+        PlayAttackWindupSfx();
+
+        float windup = Mathf.Max(0f, enemyData.attackWindup);
+        while (windup > 0f)
+        {
+            windup -= Time.deltaTime;
+            transform.rotation = lockedRotation;
+            if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+            yield return null;
+        }
+
+        // Impact phase - damage after windup
+        if (HasTrigger(attackImpactTrigger))
+            SetTriggerSync(attackImpactTrigger);
+        PlayAttackImpactSfx();
 
         float radius = Mathf.Max(0.8f, enemyData.attackRange);
         Vector3 center = transform.position + transform.forward * (enemyData.attackRange * 0.5f);
@@ -129,11 +175,28 @@ public class BerberokaAI : BaseEnemyAI
         foreach (var c in cols)
         {
             var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null) ps.TakeDamage(enemyData.basicDamage);
+            if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, enemyData.basicDamage);
         }
+        if (basicAttackCameraShakeIntensity > 0f)
+            TriggerCameraShakeForNearbyPlayers(center, basicAttackCameraShakeRadius, basicAttackCameraShakeIntensity, basicAttackCameraShakeDuration);
 
-        lastAttackTime = Time.time;
-        attackLockTimer = enemyData.attackMoveLock;
+        float basicExhaustedTotal = GetBasicExhaustedDuration();
+        attackLockTimer = Mathf.Max(enemyData.attackMoveLock, basicExhaustedTotal);
+
+        // End attack state before exhausted so Busy and Exhausted don't overlap
+        EndAction();
+
+        // Exhausted phase: distinct state, blocks all transitions; cooldown starts only after exhausted ends
+        isExhausted = true;
+        if (HasBool("Exhausted")) SetBoolSync("Exhausted", true);
+        yield return RunExhaustedPhase(lockedRotation, basicAttackExhaustedTime, basicAttackStoppageTime, basicAttackRecoveryTime);
+        if (HasBool("Exhausted")) SetBoolSync("Exhausted", false);
+        isExhausted = false;
+
+        basicRoutine = null;
+        lastAttackTime = Time.time; // cooldown regenerates only after exhausted
+        if (basicExhaustedTotal > 0f)
+            globalBusyTimer = Mathf.Max(globalBusyTimer, basicExhaustedTotal);
     }
 
     protected override bool TrySpecialAbilities()
@@ -160,7 +223,7 @@ public class BerberokaAI : BaseEnemyAI
     // Water Vortex (DoT pull)
     private bool CanVortex()
     {
-        if (isBusy || vortexActive) return false;
+        if (basicRoutine != null || isBusy || vortexActive || isExhausted) return false;
         if (Time.time - lastVortexTime < vortexCooldown) return false;
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
@@ -170,15 +233,13 @@ public class BerberokaAI : BaseEnemyAI
 
     private void StartVortex()
     {
-        lastVortexTime = Time.time;
-        if (enemyData != null) lastAttackTime = Time.time;
         StartCoroutine(CoVortex());
     }
 
     private IEnumerator CoVortex()
     {
         BeginAction(AIState.Special1);
-        if (animator != null && HasTrigger(vortexTrigger)) animator.SetTrigger(vortexTrigger);
+        if (HasTrigger(vortexTrigger)) SetTriggerSync(vortexTrigger);
         if (audioSource != null && vortexWindupSFX != null)
         {
             audioSource.clip = vortexWindupSFX;
@@ -188,12 +249,12 @@ public class BerberokaAI : BaseEnemyAI
         GameObject windupFx = null;
         if (vortexWindupVFX != null)
         {
-            windupFx = Instantiate(vortexWindupVFX, transform);
-            windupFx.transform.localPosition = vortexVFXOffset;
-            if (vortexVFXScale > 0f) windupFx.transform.localScale = Vector3.one * vortexVFXScale;
+            Vector3 scale = vortexVFXScale > 0f ? Vector3.one * vortexVFXScale : Vector3.one;
+            windupFx = SpawnVFXSync(vortexWindupVFX, vortexVFXOffset, scale, true);
         }
         // Indicator appears at windup start and grows to full radius
         GameObject indicatorWindup = null;
+        string indicatorId = $"vortex_indicator_{Time.time}";
         Vector3 indicatorTarget = new Vector3(
             Mathf.Max(0.01f, vortexIndicatorScale.x),
             Mathf.Max(0.01f, vortexIndicatorScale.y),
@@ -201,10 +262,9 @@ public class BerberokaAI : BaseEnemyAI
         );
         if (vortexIndicatorPrefab != null)
         {
-            indicatorWindup = Instantiate(vortexIndicatorPrefab, transform);
-            indicatorWindup.transform.localPosition = vortexIndicatorOffset;
-            if (vortexIndicatorRotate90X) indicatorWindup.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
-            indicatorWindup.transform.localScale = new Vector3(0.01f, 0.01f, 0.01f);
+            Vector3 initialScale = new Vector3(0.01f, 0.01f, 0.01f);
+            indicatorWindup = SpawnVFXSync(vortexIndicatorPrefab, vortexIndicatorOffset, initialScale, true, indicatorId);
+            if (indicatorWindup != null && vortexIndicatorRotate90X) indicatorWindup.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
         }
         float wind = Mathf.Max(0f, vortexWindup);
         float indicatorGrowTime = Mathf.Max(0.01f, vortexWindup * 0.2f); // indicator emerges in 50% of windup
@@ -233,6 +293,8 @@ public class BerberokaAI : BaseEnemyAI
                 float pct = Mathf.Clamp01(indicatorTimer / indicatorGrowTime);
                 Vector3 s = Vector3.Lerp(new Vector3(0.01f, 0.01f, 0.01f), indicatorTarget, pct);
                 indicatorWindup.transform.localScale = s;
+                // Sync scale to remote clients
+                SyncVFXScale(indicatorId, s);
             }
             yield return null;
         }
@@ -244,29 +306,28 @@ public class BerberokaAI : BaseEnemyAI
         if (windupFx != null) Destroy(windupFx);
         // replace windup indicator with active one (keeps same scale)
         if (indicatorWindup != null) Destroy(indicatorWindup);
-        if (audioSource != null && vortexActiveSFX != null) audioSource.PlayOneShot(vortexActiveSFX);
+        PlaySfx(vortexActiveSFX);
+        if (vortexCameraShakeIntensity > 0f)
+            TriggerCameraShakeForNearbyPlayers(transform.position, vortexCameraShakeRadius, vortexCameraShakeIntensity, vortexCameraShakeDuration);
         GameObject activeFx = null;
         GameObject indicatorFx = null;
         if (vortexActiveVFX != null)
         {
-            activeFx = Instantiate(vortexActiveVFX, transform);
-            activeFx.transform.localPosition = vortexVFXOffset;
-            if (vortexVFXScale > 0f) activeFx.transform.localScale = Vector3.one * vortexVFXScale;
+            Vector3 scale = vortexVFXScale > 0f ? Vector3.one * vortexVFXScale : Vector3.one;
+            activeFx = SpawnVFXSync(vortexActiveVFX, vortexVFXOffset, scale, true);
         }
         if (vortexIndicatorPrefab != null)
         {
-            indicatorFx = Instantiate(vortexIndicatorPrefab, transform);
-            indicatorFx.transform.localPosition = vortexIndicatorOffset;
-            if (vortexIndicatorRotate90X) indicatorFx.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
-            indicatorFx.transform.localScale = new Vector3(
+            Vector3 indicatorScale = new Vector3(
                 Mathf.Max(0.01f, vortexIndicatorScale.x),
                 Mathf.Max(0.01f, vortexIndicatorScale.y),
                 Mathf.Max(0.01f, vortexIndicatorScale.z)
             );
+            indicatorFx = SpawnVFXSync(vortexIndicatorPrefab, vortexIndicatorOffset, indicatorScale, true);
+            if (indicatorFx != null && vortexIndicatorRotate90X) indicatorFx.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
         }
-        // allow movement while vortex is active
         vortexActive = true;
-        EndAction();
+        EndAction(); // Release enemy so he can move and attack during vortex (vortex is a buff)
         int ticks = Mathf.Max(1, vortexTicks);
         float interval = Mathf.Max(0.05f, vortexTickInterval);
         for (int i = 0; i < ticks; i++)
@@ -275,7 +336,7 @@ public class BerberokaAI : BaseEnemyAI
             foreach (var c in cols)
             {
                 var ps = c.GetComponentInParent<PlayerStats>();
-                if (ps != null) ps.TakeDamage(vortexTickDamage);
+                if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, vortexTickDamage);
                 // pull towards center
                 var rb = c.attachedRigidbody;
                 if (rb != null)
@@ -291,25 +352,13 @@ public class BerberokaAI : BaseEnemyAI
         if (activeFx != null) Destroy(activeFx);
         if (indicatorFx != null) Destroy(indicatorFx);
         vortexActive = false;
-        if (vortexStoppageTime > 0f)
-        {
-            float stopTimer = vortexStoppageTime;
-            // Do not rotate or move while stopped
-            while (stopTimer > 0f)
-            {
-                stopTimer -= Time.deltaTime;
-                if (controller != null && controller.enabled)
-                    controller.SimpleMove(Vector3.zero);
-                // NO FaceTarget or rotation
-                yield return null;
-            }
-        }
+        lastVortexTime = Time.time; // no exhausted - vortex is a buff, Berberoka can keep fighting
     }
 
     // Flood Crash (cone)
     private bool CanFloodCrash()
     {
-        if (isBusy || vortexActive) return false;
+        if (basicRoutine != null || isBusy || isExhausted) return false;
         if (Time.time - lastFloodTime < floodCrashCooldown) return false;
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
@@ -319,31 +368,28 @@ public class BerberokaAI : BaseEnemyAI
 
     private void StartFloodCrash()
     {
-        lastFloodTime = Time.time;
-        if (enemyData != null) lastAttackTime = Time.time;
         StartCoroutine(CoFloodCrash());
     }
 
     private IEnumerator CoFloodCrash()
     {
         BeginAction(AIState.Special2);
-        if (animator != null && HasTrigger(floodTrigger)) animator.SetTrigger(floodTrigger);
-        if (audioSource != null && floodWindupSFX != null) audioSource.PlayOneShot(floodWindupSFX);
+        if (HasTrigger(floodTrigger)) SetTriggerSync(floodTrigger);
+        PlaySfx(floodWindupSFX);
         GameObject windFx = null;
         if (floodWindupVFX != null)
         {
-            windFx = Instantiate(floodWindupVFX, transform);
-            windFx.transform.localPosition = floodVFXOffset;
-            if (floodVFXScale > 0f) windFx.transform.localScale = Vector3.one * floodVFXScale;
+            Vector3 scale = floodVFXScale > 0f ? Vector3.one * floodVFXScale : Vector3.one;
+            windFx = SpawnVFXSync(floodWindupVFX, floodVFXOffset, scale, true);
         }
         // Flood indicator during windup
         GameObject floodIndicator = null;
+        string floodIndicatorId = $"flood_indicator_{Time.time}";
         if (floodIndicatorPrefab != null)
         {
-            floodIndicator = Instantiate(floodIndicatorPrefab, transform);
-            floodIndicator.transform.localPosition = floodIndicatorOffset;
-            if (floodIndicatorRotate90X) floodIndicator.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
-            floodIndicator.transform.localScale = new Vector3(0.01f, 0.01f, 0.01f);
+            Vector3 initialScale = new Vector3(0.01f, 0.01f, 0.01f);
+            floodIndicator = SpawnVFXSync(floodIndicatorPrefab, floodIndicatorOffset, initialScale, true, floodIndicatorId);
+            if (floodIndicator != null && floodIndicatorRotate90X) floodIndicator.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
         }
         Vector3 floodTargetScale = new Vector3(
             Mathf.Max(0.01f, floodIndicatorScale.x),
@@ -374,18 +420,21 @@ public class BerberokaAI : BaseEnemyAI
                 float t01 = Mathf.Clamp01(floodIndicatorTimer / floodIndicatorGrowTime);
                 Vector3 s = Vector3.Lerp(new Vector3(0.01f,0.01f,0.01f), floodTargetScale, t01);
                 floodIndicator.transform.localScale = s;
+                // Sync scale to remote clients
+                SyncVFXScale(floodIndicatorId, s);
             }
             yield return null;
         }
         if (windFx != null) Destroy(windFx);
         if (floodImpactVFX != null)
         {
-            var fx = Instantiate(floodImpactVFX, transform);
-            fx.transform.localPosition = floodVFXOffset;
-            if (floodVFXScale > 0f) fx.transform.localScale = Vector3.one * floodVFXScale;
+            Vector3 scale = floodVFXScale > 0f ? Vector3.one * floodVFXScale : Vector3.one;
+            SpawnVFXSync(floodImpactVFX, floodVFXOffset, scale, true);
         }
-        if (audioSource != null && floodImpactSFX != null) audioSource.PlayOneShot(floodImpactSFX);
+        PlaySfx(floodImpactSFX);
         if (floodIndicator != null) Destroy(floodIndicator);
+        if (floodCameraShakeIntensity > 0f)
+            TriggerCameraShakeForNearbyPlayers(transform.position, floodCameraShakeRadius, floodCameraShakeIntensity, floodCameraShakeDuration);
 
         // cone damage
         var all = Physics.OverlapSphere(transform.position, floodCrashRange, LayerMask.GetMask("Player"));
@@ -400,11 +449,10 @@ public class BerberokaAI : BaseEnemyAI
             if (angle <= halfAngle)
             {
                 var ps = c.GetComponentInParent<PlayerStats>();
-                if (ps != null) ps.TakeDamage(floodCrashDamage);
+                if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, floodCrashDamage);
             }
         }
-        EndAction();
-        if (floodProjectilePrefab != null && projectileCount > 0)
+        if (!string.IsNullOrEmpty(floodProjectilePrefabPath) && projectileCount > 0)
         {
             float step = (projectileCount > 1) ? projectileSpreadAngle / (projectileCount - 1) : 0f;
             float startYaw = -projectileSpreadAngle * 0.5f;
@@ -413,24 +461,38 @@ public class BerberokaAI : BaseEnemyAI
                 float angle = startYaw + step * i;
                 Quaternion rot = transform.rotation * Quaternion.Euler(0f, angle, 0f);
                 Vector3 spawnPos = transform.position + rot * floodProjectileSpawnOffset;
-                var projObj = Instantiate(floodProjectilePrefab, spawnPos, rot);
+                
+                // Network-safe instantiation
+                GameObject projObj;
+                if (PhotonNetwork.IsConnected && !PhotonNetwork.OfflineMode)
+                    projObj = PhotonNetwork.Instantiate(floodProjectilePrefabPath, spawnPos, rot);
+                else
+                {
+                    // Load prefab from Resources for offline mode
+                    GameObject prefab = Resources.Load<GameObject>(floodProjectilePrefabPath);
+                    if (prefab != null)
+                        projObj = Instantiate(prefab, spawnPos, rot);
+                    else
+                    {
+                        Debug.LogError($"[BerberokaAI] Failed to load projectile prefab from path: {floodProjectilePrefabPath}");
+                        continue;
+                    }
+                }
+                
                 var proj = projObj.GetComponent<EnemyProjectile>();
                 if (proj != null)
                     proj.Initialize(gameObject, floodCrashDamage, projectileSpeed, projectileLifetime);
             }
         }
-        if (floodStoppageTime > 0f)
-        {
-            float stopTimer = floodStoppageTime;
-            while (stopTimer > 0f)
-            {
-                stopTimer -= Time.deltaTime;
-                if (controller != null && controller.enabled)
-                    controller.SimpleMove(Vector3.zero);
-                // NO FaceTarget or rotation
-                yield return null;
-            }
-        }
+
+        // Exhausted: distinct phase after flood, no overlap with Busy
+        EndAction();
+        isExhausted = true;
+        if (HasBool("Exhausted")) SetBoolSync("Exhausted", true);
+        yield return RunExhaustedPhase(transform.rotation, floodExhaustedTime, floodStoppageTime, floodRecoveryTime);
+        if (HasBool("Exhausted")) SetBoolSync("Exhausted", false);
+        lastFloodTime = Time.time; // cooldown regenerates only after exhausted
+        isExhausted = false;
     }
 
     // Keep distance from target; if too close, back off or strafe
@@ -443,10 +505,10 @@ public class BerberokaAI : BaseEnemyAI
         float dist = to.magnitude;
         if (dist < Mathf.Max(0.1f, PreferredDistance))
         {
-            if (attackLockTimer > 0f || isBusy) return NodeState.Running;
+            if (attackLockTimer > 0f || isBusy || isExhausted) return NodeState.Running;
             Vector3 dir = -to.normalized;
             float speed = GetMoveSpeed() * Mathf.Clamp(BackoffSpeedMultiplier, 0.1f, 2f);
-            controller.SimpleMove(dir * speed);
+            if (controller != null && controller.enabled) controller.SimpleMove(dir * speed);
             // face target while backing off
             Vector3 lookTarget = new Vector3(target.position.x, transform.position.y, target.position.z);
             Vector3 dirToLook = (lookTarget - transform.position);
@@ -459,6 +521,67 @@ public class BerberokaAI : BaseEnemyAI
             return NodeState.Running;
         }
         return NodeState.Success;
+    }
+
+    /// <summary>Runs exhausted phase: if exhaustedTime > 0 uses that; else if stoppage+recovery > 0 uses those. ExhaustedTime=0 means no exhausted.</summary>
+    private IEnumerator RunExhaustedPhase(Quaternion lockedRotation, float exhaustedTime, float stoppageTime, float recoveryTime)
+    {
+        if (exhaustedTime > 0f)
+        {
+            float t = exhaustedTime;
+            while (t > 0f)
+            {
+                t -= Time.deltaTime;
+                transform.rotation = lockedRotation;
+                if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+                yield return null;
+            }
+        }
+        else if (exhaustedTime == 0f)
+        {
+            // ExhaustedTime=0 means no exhausted; skip even if stoppage/recovery are set
+            yield break;
+        }
+        else if (stoppageTime > 0f || recoveryTime > 0f)
+        {
+            if (stoppageTime > 0f)
+            {
+                float t = stoppageTime;
+                while (t > 0f)
+                {
+                    t -= Time.deltaTime;
+                    transform.rotation = lockedRotation;
+                    if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+                    yield return null;
+                }
+            }
+            if (recoveryTime > 0f)
+            {
+                float t = recoveryTime;
+                while (t > 0f)
+                {
+                    t -= Time.deltaTime;
+                    transform.rotation = lockedRotation;
+                    if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+                    yield return null;
+                }
+            }
+        }
+    }
+
+    private float GetBasicExhaustedDuration()
+    {
+        if (basicAttackExhaustedTime > 0f) return basicAttackExhaustedTime;
+        return basicAttackStoppageTime + basicAttackRecoveryTime;
+    }
+
+    public float VortexCooldownRemaining => Mathf.Max(0f, vortexCooldown - (Time.time - lastVortexTime));
+    public float FloodCooldownRemaining => Mathf.Max(0f, floodCrashCooldown - (Time.time - lastFloodTime));
+
+    protected override string GetExtraDebugInfo()
+    {
+        float basic = enemyData != null ? Mathf.Max(0f, enemyData.attackCooldown - (Time.time - lastAttackTime)) : 0f;
+        return $" CD basic:{basic:F1} vortex:{VortexCooldownRemaining:F1} flood:{FloodCooldownRemaining:F1}";
     }
 
     private bool IsFacingTarget(Transform target, float maxAngle)

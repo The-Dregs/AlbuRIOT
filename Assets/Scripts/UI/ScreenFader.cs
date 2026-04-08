@@ -26,6 +26,11 @@ public class ScreenFader : MonoBehaviour
         SetAlpha(0f);
     }
 
+    void OnDestroy()
+    {
+        if (Instance == this) Instance = null;
+    }
+
     private void EnsureUI()
     {
         if (fadeImage != null) return;

@@ -13,6 +13,9 @@ public class NPCDialogueManager : MonoBehaviour
     public TextMeshProUGUI speakerText;
     public TextMeshProUGUI dialogueText;
     public Button nextButton;
+    [Header("Audio")]
+    [Tooltip("Audio source for playing dialogue sounds. If not assigned, will create one automatically.")]
+    public AudioSource audioSource;
 
     private NPCDialogueData currentDialogue;
     private int currentLine = 0;
@@ -27,6 +30,7 @@ public class NPCDialogueManager : MonoBehaviour
     void Start()
     {
         EnsureUI();
+        EnsureAudioSource();
         if (dialoguePanel != null) dialoguePanel.SetActive(false);
         if (nextButton != null)
         {
@@ -119,7 +123,12 @@ public class NPCDialogueManager : MonoBehaviour
         currentLine = 0;
     EnsureUI();
     EnsureNextButtonWired();
-        if (dialoguePanel != null) dialoguePanel.SetActive(true);
+        if (dialoguePanel != null)
+        {
+            dialoguePanel.SetActive(true);
+            // bring dialogue canvas to front so it renders above the player HUD
+            BringDialogueToFront();
+        }
         // input lock was already acquired in StartDialogue; LocalInputLocker also unlocks cursor
         // bridge event for external systems (no type change to keep compatibility)
         OnDialogueStarted?.Invoke(null);
@@ -132,10 +141,39 @@ public class NPCDialogueManager : MonoBehaviour
         {
             if (speakerText != null) speakerText.text = currentDialogue.lines[currentLine].speaker;
             if (dialogueText != null) dialogueText.text = currentDialogue.lines[currentLine].text;
+            
+            // Play sound clip for this line if available
+            PlayLineSound(currentDialogue.lines[currentLine]);
         }
         else
         {
             EndDialogue();
+        }
+    }
+    
+    void PlayLineSound(NPCDialogueData.Line line)
+    {
+        if (line == null || line.soundClip == null) return;
+        
+        EnsureAudioSource();
+        if (audioSource != null)
+        {
+            audioSource.PlayOneShot(line.soundClip);
+        }
+    }
+    
+    void EnsureAudioSource()
+    {
+        if (audioSource != null) return;
+        
+        // Try to find existing AudioSource on this GameObject
+        audioSource = GetComponent<AudioSource>();
+        if (audioSource == null)
+        {
+            // Create new AudioSource
+            audioSource = gameObject.AddComponent<AudioSource>();
+            audioSource.playOnAwake = false;
+            audioSource.spatialBlend = 0f; // 2D sound
         }
     }
 
@@ -217,6 +255,7 @@ public class NPCDialogueManager : MonoBehaviour
         var canvasGO = new GameObject("NPCDialogue_Canvas", typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
         var canvas = canvasGO.GetComponent<Canvas>();
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 999;
         var scaler = canvasGO.GetComponent<CanvasScaler>();
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
         scaler.referenceResolution = new Vector2(1920, 1080);
@@ -274,16 +313,24 @@ public class NPCDialogueManager : MonoBehaviour
         nextButton.onClick.AddListener(NextLine);
     }
 
+    /// <summary>ensure the dialogue panel's canvas renders above all other canvases (player hud, etc).</summary>
+    private void BringDialogueToFront()
+    {
+        if (dialoguePanel == null) return;
+
+        // find the canvas that owns the dialogue panel
+        Canvas canvas = dialoguePanel.GetComponent<Canvas>();
+        if (canvas == null) canvas = dialoguePanel.GetComponentInParent<Canvas>();
+        if (canvas == null) return;
+
+        canvas.overrideSorting = true;
+        canvas.sortingOrder = 999;
+    }
+
     private Transform FindLocalPlayerTransform()
     {
-        // prefer photon local player if connected; otherwise, tagged player
-        var stats = FindObjectsByType<PlayerStats>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
-        foreach (var s in stats)
-        {
-            var pv = s.GetComponent<Photon.Pun.PhotonView>();
-            if (pv == null) return s.transform; // offline, take first
-            if (pv.IsMine) return s.transform;
-        }
+        var t = PlayerRegistry.GetLocalPlayerTransform();
+        if (t != null) return t;
         var go = GameObject.FindGameObjectWithTag("Player");
         return go != null ? go.transform : null;
     }

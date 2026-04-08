@@ -18,10 +18,14 @@ MonoBehaviour:
   basicDamage: 10
   moveSpeed: 1.5
   chaseSpeed: 3.5
+  patrolSpeed: 2
   rotationSpeedDegrees: 360
   backoffSpeedMultiplier: 0.6
+  orbitWhenOnCooldown: 1
+  orbitSpeedMultiplier: 0.7
+  desiredAttackDistanceFraction: 0.85
   attackRange: 3
-  attackWindup: 0.3
+  attackWindup: 1.2
   attackCooldown: 2
   attackMoveLock: 0.2
   detectionRange: 14
@@ -30,6 +34,7 @@ MonoBehaviour:
   patrolRadius: 7
   patrolWait: 1.5
   specialFacingAngle: 20
+  preferredDistance: 3
   aggressionLevel: 0.5
   intelligenceLevel: 0.5
   deathVFXPrefab: {fileID: 0}

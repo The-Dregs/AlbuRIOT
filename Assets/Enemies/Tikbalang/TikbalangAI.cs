@@ -16,6 +16,7 @@ public class TikbalangAI : BaseEnemyAI
     public float chargeSpeed = 14f;
     public float chargeHitRadius = 1.7f;
     public float chargeMinDistance = 2f;
+    public float chargeMaxDistance = 24f;
     public GameObject chargeVFX; // windup
     public AudioClip chargeSFX;  // windup
     public GameObject chargeImpactVFX; // activation
@@ -31,6 +32,7 @@ public class TikbalangAI : BaseEnemyAI
     public float stompCooldown = 10f;
     public float stompWindup = 0.3f;
     public float stompMinDistance = 4f;
+    public float stompMaxDistance = 6f;
     public GameObject stompVFX; // windup
     public AudioClip stompSFX;  // windup
     public GameObject stompImpactVFX; // activation
@@ -62,11 +64,12 @@ public class TikbalangAI : BaseEnemyAI
     // Runtime state
     private float lastChargeTime = -9999f;
     private float lastStompTime = -9999f;
-    private float lastAnySkillRecoveryEnd = -9999f; // Track when ANY skill's recovery ended
-    private float lastAnySkillRecoveryStart = -9999f; // Track when recovery phase starts
-    private AudioSource audioSource;
+    private float lastAnySkillRecoveryEnd = -9999f; // When current recovery phase ends
+    private float lastAnySkillRecoveryStart = -9999f; // When recovery phase started
     private Coroutine activeAbility;
     private Coroutine basicRoutine;
+    private bool isExhausted = false; // Blocks all actions during stoppage; cleared when recovery starts
+    private bool inRecoveryPhase = false; // True during recovery - allows movement with gradual speed
 
     // Debug accessors
     public float ChargeCooldownRemaining => Mathf.Max(0f, chargeCooldown - (Time.time - lastChargeTime));
@@ -74,11 +77,7 @@ public class TikbalangAI : BaseEnemyAI
 
     #region Initialization
 
-    protected override void InitializeEnemy()
-    {
-        audioSource = GetComponent<AudioSource>();
-        if (audioSource == null) audioSource = gameObject.AddComponent<AudioSource>();
-    }
+    protected override void InitializeEnemy() { }
 
     protected override void BuildBehaviorTree()
     {
@@ -86,9 +85,10 @@ public class TikbalangAI : BaseEnemyAI
         var hasTarget = new ConditionNode(blackboard, HasTarget, "has_target");
         var targetInDetection = new ConditionNode(blackboard, TargetInDetectionRange, "in_detect_range");
         var moveToTarget = new ActionNode(blackboard, MoveTowardsTarget, "move_to_target");
-        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRange, "in_attack_range");
+        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRangeAndFacing, "in_attack_range_facing");
         var basicAttack = new ActionNode(blackboard, () => { PerformBasicAttack(); return NodeState.Success; }, "basic");
 
+        var exhaustedGate = new ActionNode(blackboard, () => isExhausted ? NodeState.Running : NodeState.Success, "exhausted_gate");
         var canCharge = new ConditionNode(blackboard, CanCharge, "can_charge");
         var doCharge = new ActionNode(blackboard, () => { StartCharge(); return NodeState.Success; }, "charge");
         var canStomp = new ConditionNode(blackboard, CanStomp, "can_stomp");
@@ -100,6 +100,7 @@ public class TikbalangAI : BaseEnemyAI
                     updateTarget,
                     hasTarget,
                     targetInDetection,
+                    exhaustedGate,
                     new Selector(blackboard, "attack_opts").Add(
                         new Sequence(blackboard, "charge_seq").Add(canCharge, doCharge),
                         new Sequence(blackboard, "stomp_seq").Add(canStomp, doStomp),
@@ -117,9 +118,8 @@ public class TikbalangAI : BaseEnemyAI
 
     protected override void PerformBasicAttack()
     {
-        if (basicRoutine != null) return;
-        if (activeAbility != null) return; // Don't interrupt special abilities
-        if (isBusy || globalBusyTimer > 0f) return; // Don't interrupt other actions
+        if (basicRoutine != null || activeAbility != null || isExhausted) return;
+        if (isBusy || globalBusyTimer > 0f) return;
         if (enemyData == null) return;
         if (Time.time - lastAttackTime < enemyData.attackCooldown) return;
 
@@ -132,28 +132,29 @@ public class TikbalangAI : BaseEnemyAI
     private IEnumerator CoBasicAttack(Transform target)
     {
         BeginAction(AIState.BasicAttack);
+        Quaternion lockedRotation = transform.rotation;
         
-        // Windup animation trigger
-        if (animator != null)
-        {
-            if (HasTrigger(attackWindupTrigger))
-                animator.SetTrigger(attackWindupTrigger);
-            else if (HasTrigger(attackTrigger))
-                animator.SetTrigger(attackTrigger);
-        }
+        // Windup animation trigger (sync to network)
+        if (HasTrigger(attackWindupTrigger))
+            SetTriggerSync(attackWindupTrigger);
+        else if (HasTrigger(attackTrigger))
+            SetTriggerSync(attackTrigger);
+        PlayAttackWindupSfx();
 
-        // Windup phase - freeze movement during windup
+        // Windup phase - lock position and rotation
         float windup = Mathf.Max(0f, enemyData.attackWindup);
         while (windup > 0f)
         {
             windup -= Time.deltaTime;
+            transform.rotation = lockedRotation;
             if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
             yield return null;
         }
 
-        // Impact animation trigger
-        if (animator != null && HasTrigger(attackImpactTrigger))
-            animator.SetTrigger(attackImpactTrigger);
+        // Impact animation trigger (sync to network)
+        if (HasTrigger(attackImpactTrigger))
+            SetTriggerSync(attackImpactTrigger);
+        PlayAttackImpactSfx();
 
         // Apply damage after windup
         float radius = Mathf.Max(0.8f, enemyData.attackRange);
@@ -162,27 +163,32 @@ public class TikbalangAI : BaseEnemyAI
         foreach (var c in cols)
         {
             var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null) ps.TakeDamage(enemyData.basicDamage);
+            if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, enemyData.basicDamage);
         }
 
-        // Post-stop using attackMoveLock duration
+        // Exhausted phase: distinct from Busy, blocks all actions
         float post = Mathf.Max(0.1f, enemyData.attackMoveLock);
+        basicRoutine = null;
+        EndAction();
+        isExhausted = true;
+        if (post > 0f && HasBool("Exhausted")) SetBoolSync("Exhausted", true);
         while (post > 0f)
         {
             post -= Time.deltaTime;
+            transform.rotation = lockedRotation;
             if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
             yield return null;
         }
+        if (HasBool("Exhausted")) SetBoolSync("Exhausted", false);
+        isExhausted = false;
 
         lastAttackTime = Time.time;
         attackLockTimer = enemyData.attackMoveLock;
-        basicRoutine = null;
-        EndAction();
     }
 
     protected override bool TrySpecialAbilities()
     {
-        if (activeAbility != null) return false;
+        if (activeAbility != null || isExhausted) return false;
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
         float dist = Vector3.Distance(transform.position, target.position);
@@ -223,17 +229,26 @@ public class TikbalangAI : BaseEnemyAI
 
     #region Charge Attack
 
+    private bool IsWithinDistanceBand(Transform target, float minDistance, float maxDistance)
+    {
+        if (target == null) return false;
+        float distance = Vector3.Distance(transform.position, target.position);
+        if (distance < Mathf.Max(0f, minDistance)) return false;
+        if (maxDistance > 0f && distance > maxDistance) return false;
+        return true;
+    }
+
     private bool CanCharge()
     {
-        if (activeAbility != null) return false;
-        if (basicRoutine != null) return false; // Don't interrupt basic attacks
-        if (isBusy || globalBusyTimer > 0f) return false; // Don't interrupt basic attacks or other actions
+        if (activeAbility != null || basicRoutine != null || isExhausted) return false;
+        if (isBusy || globalBusyTimer > 0f) return false;
         if (Time.time - lastChargeTime < chargeCooldown) return false;
         if (Time.time - lastAnySkillRecoveryEnd < 4f) return false; // 4 second lock after any skill recovery
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
-        float distance = Vector3.Distance(transform.position, target.position);
-        return distance >= chargeMinDistance;
+        if (!IsFacingTarget(target, SpecialFacingAngle)) return false;
+        float maxDistance = chargeMaxDistance > 0f ? chargeMaxDistance : chargePreferredMaxDistance;
+        return IsWithinDistanceBand(target, chargeMinDistance, maxDistance);
     }
 
     private void StartCharge()
@@ -261,8 +276,8 @@ public class TikbalangAI : BaseEnemyAI
             }
         }
         
-        // Windup animation
-        if (animator != null && HasTrigger(chargeWindupTrigger)) animator.SetTrigger(chargeWindupTrigger);
+        // Windup animation (sync to network)
+        if (HasTrigger(chargeWindupTrigger)) SetTriggerSync(chargeWindupTrigger);
         // windup SFX (stoppable)
         if (audioSource != null && chargeSFX != null)
         {
@@ -303,10 +318,10 @@ public class TikbalangAI : BaseEnemyAI
             fx.transform.localPosition = chargeImpactVFXOffset;
             if (chargeImpactVFXScale > 0f) fx.transform.localScale = Vector3.one * chargeImpactVFXScale;
         }
-        if (audioSource != null && chargeImpactSFX != null) audioSource.PlayOneShot(chargeImpactSFX);
+        PlaySfx(chargeImpactSFX);
 
-        // Charge animation trigger
-        if (animator != null && HasTrigger(chargeTrigger)) animator.SetTrigger(chargeTrigger);
+        // Charge animation trigger (sync to network)
+        if (HasTrigger(chargeTrigger)) SetTriggerSync(chargeTrigger);
 
         // Charge in locked direction (set before windup)
         float chargeTime = chargeDuration;
@@ -328,7 +343,7 @@ public class TikbalangAI : BaseEnemyAI
                     var playerStats = hit.GetComponent<PlayerStats>();
                     if (playerStats != null && !hitPlayers.Contains(playerStats))
                     {
-                        playerStats.TakeDamage(chargeDamage);
+                        DamageRelay.ApplyToPlayer(playerStats.gameObject, chargeDamage);
                         hitPlayers.Add(playerStats);
                     }
                 }
@@ -338,50 +353,50 @@ public class TikbalangAI : BaseEnemyAI
             yield return null;
         }
 
-        // Stoppage recovery (AI frozen after attack)
+        // Stoppage: AI frozen, blocks all actions
         if (chargeStoppageTime > 0f)
         {
-            // Stoppage animation trigger for skills
-            if (animator != null && HasTrigger(skillStoppageTrigger)) animator.SetTrigger(skillStoppageTrigger);
-            
+            isExhausted = true;
+            if (HasTrigger(skillStoppageTrigger)) SetTriggerSync(skillStoppageTrigger);
             float stopTimer = chargeStoppageTime;
             float quarterStoppage = chargeStoppageTime * 0.75f;
-            
             while (stopTimer > 0f)
             {
                 stopTimer -= Time.deltaTime;
                 if (controller != null && controller.enabled)
                     controller.SimpleMove(Vector3.zero);
-                
-                // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
-                if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
-                {
-                    animator.SetBool("Exhausted", true);
-                }
-                
+                if (stopTimer <= quarterStoppage)
+                    SetBoolSync("Exhausted", true);
                 yield return null;
             }
-            
-            // Clear Exhausted boolean parameter
-            if (animator != null) animator.SetBool("Exhausted", false);
+            SetBoolSync("Exhausted", false);
         }
 
-        // Recovery time (AI can move but skill still on cooldown)
+        // Recovery: release for movement, gradual speed; block new skills via activeAbility
         if (chargeRecoveryTime > 0f)
         {
-            lastAnySkillRecoveryStart = Time.time; // Mark recovery start for gradual speed
+            isExhausted = false;
+            EndAction();
+            lastAnySkillRecoveryStart = Time.time;
+            lastAnySkillRecoveryEnd = Time.time + chargeRecoveryTime;
+            inRecoveryPhase = true;
             float recovery = chargeRecoveryTime;
             while (recovery > 0f)
             {
                 recovery -= Time.deltaTime;
                 yield return null;
             }
+            inRecoveryPhase = false;
+        }
+        else
+        {
+            isExhausted = false;
+            EndAction();
         }
 
         activeAbility = null;
-        lastChargeTime = Time.time; // Set cooldown timer after all recovery is done
-        lastAnySkillRecoveryEnd = Time.time; // Set global lock timer after recovery ends
-        EndAction();
+        lastChargeTime = Time.time;
+        lastAnySkillRecoveryEnd = Time.time;
     }
 
     #endregion
@@ -390,15 +405,15 @@ public class TikbalangAI : BaseEnemyAI
 
     private bool CanStomp()
     {
-        if (activeAbility != null) return false;
-        if (basicRoutine != null) return false; // Don't interrupt basic attacks
-        if (isBusy || globalBusyTimer > 0f) return false; // Don't interrupt basic attacks or other actions
+        if (activeAbility != null || basicRoutine != null || isExhausted) return false;
+        if (isBusy || globalBusyTimer > 0f) return false;
         if (Time.time - lastStompTime < stompCooldown) return false;
         if (Time.time - lastAnySkillRecoveryEnd < 4f) return false; // 4 second lock after any skill recovery
         var target = blackboard.Get<Transform>("target");
         if (target == null) return false;
-        float distance = Vector3.Distance(transform.position, target.position);
-        return distance >= stompMinDistance;
+        if (!IsFacingTarget(target, SpecialFacingAngle)) return false;
+        float maxDistance = stompMaxDistance > 0f ? stompMaxDistance : Mathf.Max(stompRadius + 0.5f, stompPreferredMaxDistance);
+        return IsWithinDistanceBand(target, stompMinDistance, maxDistance);
     }
 
     private void StartStomp()
@@ -412,8 +427,8 @@ public class TikbalangAI : BaseEnemyAI
     {
         BeginAction(AIState.Special2);
         
-        // Windup animation
-        if (animator != null && HasTrigger(stompWindupTrigger)) animator.SetTrigger(stompWindupTrigger);
+        // Windup animation (sync to network)
+        if (HasTrigger(stompWindupTrigger)) SetTriggerSync(stompWindupTrigger);
         // windup sfx (stoppable)
         if (audioSource != null && stompSFX != null)
         {
@@ -446,10 +461,10 @@ public class TikbalangAI : BaseEnemyAI
             fx.transform.localPosition = stompImpactVFXOffset;
             if (stompImpactVFXScale > 0f) fx.transform.localScale = Vector3.one * stompImpactVFXScale;
         }
-        if (audioSource != null && stompImpactSFX != null) audioSource.PlayOneShot(stompImpactSFX);
+        PlaySfx(stompImpactSFX);
 
-        // Stomp animation trigger
-        if (animator != null && HasTrigger(stompTrigger)) animator.SetTrigger(stompTrigger);
+        // Stomp animation trigger (sync to network)
+        if (HasTrigger(stompTrigger)) SetTriggerSync(stompTrigger);
 
         var hitColliders = Physics.OverlapSphere(transform.position, stompRadius);
         foreach (var hit in hitColliders)
@@ -457,87 +472,78 @@ public class TikbalangAI : BaseEnemyAI
             if (hit.CompareTag("Player"))
             {
                 var playerStats = hit.GetComponent<PlayerStats>();
-                if (playerStats != null) playerStats.TakeDamage(stompDamage);
+        if (playerStats != null) DamageRelay.ApplyToPlayer(playerStats.gameObject, stompDamage);
             }
         }
 
-        // Stoppage recovery (AI frozen after attack)
+        // Stoppage: AI frozen, blocks all actions
         if (stompStoppageTime > 0f)
         {
-            // Stoppage animation trigger for skills
-            if (animator != null && HasTrigger(skillStoppageTrigger)) animator.SetTrigger(skillStoppageTrigger);
-            
+            isExhausted = true;
+            if (HasTrigger(skillStoppageTrigger)) SetTriggerSync(skillStoppageTrigger);
             float stopTimer = stompStoppageTime;
             float quarterStoppage = stompStoppageTime * 0.75f;
-            
             while (stopTimer > 0f)
             {
                 stopTimer -= Time.deltaTime;
                 if (controller != null && controller.enabled)
                     controller.SimpleMove(Vector3.zero);
-                
-                // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
-                if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
-                {
-                    animator.SetBool("Exhausted", true);
-                }
-                
+                if (stopTimer <= quarterStoppage)
+                    SetBoolSync("Exhausted", true);
                 yield return null;
             }
-            
-            // Clear Exhausted boolean parameter
-            if (animator != null) animator.SetBool("Exhausted", false);
+            SetBoolSync("Exhausted", false);
         }
 
-        // Recovery time (AI can move but skill still on cooldown)
+        // Recovery: release for movement, gradual speed; block new skills via activeAbility
         if (stompRecoveryTime > 0f)
         {
-            lastAnySkillRecoveryStart = Time.time; // Mark recovery start for gradual speed
+            isExhausted = false;
+            EndAction();
+            lastAnySkillRecoveryStart = Time.time;
+            lastAnySkillRecoveryEnd = Time.time + stompRecoveryTime;
+            inRecoveryPhase = true;
             float recovery = stompRecoveryTime;
             while (recovery > 0f)
             {
                 recovery -= Time.deltaTime;
                 yield return null;
             }
+            inRecoveryPhase = false;
+        }
+        else
+        {
+            isExhausted = false;
+            EndAction();
         }
 
         activeAbility = null;
-        lastStompTime = Time.time; // Set cooldown timer after all recovery is done
-        lastAnySkillRecoveryEnd = Time.time; // Set global lock timer after recovery ends
-        EndAction();
+        lastStompTime = Time.time;
+        lastAnySkillRecoveryEnd = Time.time;
     }
 
     #endregion
 
     protected override float GetMoveSpeed()
     {
-        // Return 0 if AI is busy or has active ability (should be stopped)
-        if (isBusy || globalBusyTimer > 0f || activeAbility != null || basicRoutine != null)
+        // During recovery phase: allow movement with gradual speed (stoppage already ended)
+        if (inRecoveryPhase && lastAnySkillRecoveryEnd > lastAnySkillRecoveryStart)
         {
-            return 0f;
-        }
-        
-        // If AI is idle (not patrolling or chasing), return 0
-        if (aiState == AIState.Idle)
-        {
-            return 0f;
-        }
-        
-        float baseSpeed = base.GetMoveSpeed();
-        
-        // If we're in recovery phase, gradually increase speed from 0.3 to 1.0
-        if (Time.time >= lastAnySkillRecoveryStart && Time.time <= lastAnySkillRecoveryEnd && lastAnySkillRecoveryStart >= 0f)
-        {
+            float baseSpeed = base.GetMoveSpeed();
             float recoveryDuration = lastAnySkillRecoveryEnd - lastAnySkillRecoveryStart;
-            if (recoveryDuration > 0f)
-            {
-                float elapsed = Time.time - lastAnySkillRecoveryStart;
-                float progress = Mathf.Clamp01(elapsed / recoveryDuration);
-                float speedMultiplier = Mathf.Lerp(0.3f, 1.0f, progress); // Start at 30% speed, lerp to 100%
-                return baseSpeed * speedMultiplier;
-            }
+            float elapsed = Time.time - lastAnySkillRecoveryStart;
+            float progress = Mathf.Clamp01(elapsed / recoveryDuration);
+            float speedMultiplier = Mathf.Lerp(0.3f, 1.0f, progress);
+            return baseSpeed * speedMultiplier;
         }
-        
-        return baseSpeed;
+
+        // Return 0 if busy, exhausted, or has active ability
+        if (isBusy || globalBusyTimer > 0f || isExhausted || activeAbility != null || basicRoutine != null)
+            return 0f;
+
+        if (aiState == AIState.Idle)
+            return 0f;
+
+        return base.GetMoveSpeed();
     }
 }

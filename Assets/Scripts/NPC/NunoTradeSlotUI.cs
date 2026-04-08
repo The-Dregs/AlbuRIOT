@@ -5,10 +5,28 @@ using System.Text;
 
 public class NunoTradeSlotUI : MonoBehaviour
 {
+    private static Sprite _placeholderSprite;
+    private static Sprite PlaceholderSprite
+    {
+        get
+        {
+            if (_placeholderSprite == null)
+            {
+                var tex = new Texture2D(1, 1);
+                tex.SetPixel(0, 0, new Color(0.45f, 0.2f, 0.55f));
+                tex.Apply();
+                tex.filterMode = FilterMode.Point;
+                _placeholderSprite = Sprite.Create(tex, new Rect(0, 0, 1, 1), Vector2.one);
+            }
+            return _placeholderSprite;
+        }
+    }
+
     [Header("UI References")]
+    public Image requiredIcon;
+    public TextMeshProUGUI requiredText;
     public Image rewardIcon;
     public TextMeshProUGUI rewardText;
-    public TextMeshProUGUI requiredText;
     public Button tradeButton;
     public GameObject disabledOverlay;
     
@@ -21,9 +39,9 @@ public class NunoTradeSlotUI : MonoBehaviour
         trade = tradeData;
         tradeIndex = index;
         shopManager = manager;
-        
         if (trade == null) return;
-        
+        if (tradeButton != null) tradeButton.onClick.RemoveAllListeners();
+        if (tradeButton != null) tradeButton.onClick.AddListener(OnTradeButton);
         UpdateUI();
     }
     
@@ -31,9 +49,21 @@ public class NunoTradeSlotUI : MonoBehaviour
     {
         if (trade == null) return;
         
-        // Display reward item
+        if (requiredIcon != null && trade.requiredItems != null && trade.requiredItems.Length > 0 && trade.requiredItems[0] != null)
+        {
+            requiredIcon.preserveAspect = true;
+            requiredIcon.enabled = true;
+            requiredIcon.sprite = trade.requiredItems[0].icon != null ? trade.requiredItems[0].icon : PlaceholderSprite;
+        }
+        else if (requiredIcon != null) requiredIcon.enabled = false;
+        
         if (rewardIcon != null && trade.rewardItem != null)
-            rewardIcon.sprite = trade.rewardItem.icon;
+        {
+            rewardIcon.preserveAspect = true;
+            rewardIcon.enabled = true;
+            rewardIcon.sprite = trade.rewardItem.icon != null ? trade.rewardItem.icon : PlaceholderSprite;
+        }
+        else if (rewardIcon != null) rewardIcon.enabled = false;
         
         if (rewardText != null)
         {

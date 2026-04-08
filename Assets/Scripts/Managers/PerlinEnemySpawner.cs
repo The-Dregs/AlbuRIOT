@@ -39,6 +39,16 @@ public class PerlinEnemySpawner : MonoBehaviourPunCallbacks
     [System.NonSerialized] public int lastPlaced = 0;
     [System.NonSerialized] public int lastAttempts = 0;
 
+    // Metrics for formulas 12.3 and 13.x
+    [System.NonSerialized] public float lastInitialThreshold = 0f;
+    [System.NonSerialized] public float lastFinalThreshold = 0f;
+    [System.NonSerialized] public int lastBackoffSteps = 0;
+    [System.NonSerialized] public int lastPerlinRejected = 0;
+    [System.NonSerialized] public int lastHeightRejected = 0;
+    [System.NonSerialized] public int lastSlopeRejected = 0;
+    [System.NonSerialized] public int lastValidCandidates = 0; // passed perlin+height+slope, before spacing
+    [System.NonSerialized] public int lastSpacingRejected = 0;
+
     void Start()
     {
         if (terrain == null)
@@ -147,11 +157,21 @@ public class PerlinEnemySpawner : MonoBehaviourPunCallbacks
         var td = terrain.terrainData;
         Vector3 size = td.size; // x = width, y = height, z = length
         float threshold = perlinThreshold;
+        lastInitialThreshold = threshold;
+        lastBackoffSteps = 0;
         int placed = 0;
         int attempts = 0;
         int maxAttempts = desiredCount * 50;
-        var positions = new List<Vector3>();
+        // Pre-allocate list with estimated capacity to reduce allocations
+        var positions = new List<Vector3>(desiredCount);
         var prng = new System.Random(seed != 0 ? seed : Random.Range(int.MinValue, int.MaxValue));
+
+        // reset per-run counters
+        int perlinRejected = 0;
+        int heightRejected = 0;
+        int slopeRejected = 0;
+        int validCandidates = 0;
+        int spacingRejected = 0;
 
         // sampling strategy: random rejection sampling with perlin mask + constraints
         while (placed < desiredCount && attempts < maxAttempts)
@@ -164,12 +184,14 @@ public class PerlinEnemySpawner : MonoBehaviourPunCallbacks
             float vx = (nx * size.x) * perlinScale + _offset.x;
             float vz = (nz * size.z) * perlinScale + _offset.y;
             float p = Mathf.PerlinNoise(vx, vz);
-            if (p < threshold) continue;
+            if (p < threshold) { perlinRejected++; continue; }
 
             float hNorm = td.GetInterpolatedHeight(nx, nz) / size.y;
-            if (hNorm < minNormalizedHeight) continue;
+            if (hNorm < minNormalizedHeight) { heightRejected++; continue; }
             float slope = td.GetSteepness(nx, nz);
-            if (slope > maxSlope) continue;
+            if (slope > maxSlope) { slopeRejected++; continue; }
+
+            validCandidates++;
 
             Vector3 world = new Vector3(nx * size.x, 0f, nz * size.z) + terrain.transform.position;
             // correct height using SampleHeight to align exactly on terrain
@@ -181,7 +203,7 @@ public class PerlinEnemySpawner : MonoBehaviourPunCallbacks
                 if ((pt - world).sqrMagnitude < (minSpawnSpacing * minSpawnSpacing))
                 { tooClose = true; break; }
             }
-            if (tooClose) continue;
+            if (tooClose) { spacingRejected++; continue; }
 
             // pick a random prefab index
             int prefabIndex = prng.Next(0, photonPrefabNames != null && PhotonNetwork.IsConnected && PhotonNetwork.InRoom ? photonPrefabNames.Length : localPrefabs.Length);
@@ -199,12 +221,20 @@ public class PerlinEnemySpawner : MonoBehaviourPunCallbacks
             // if we can't hit the target, relax threshold gradually
             if (attempts % 200 == 0 && placed < desiredCount && threshold > minThreshold)
             {
-                threshold = Mathf.Max(minThreshold, threshold - backoffStep);
+                float next = Mathf.Max(minThreshold, threshold - backoffStep);
+                if (next < threshold) lastBackoffSteps++;
+                threshold = next;
                 if (logSummary) Debug.Log($"perlin spawner: backing off threshold to {threshold:F2} after {attempts} attempts, placed {placed}");
             }
         }
 
         lastPlaced = placed; lastAttempts = attempts;
+        lastFinalThreshold = threshold;
+        lastPerlinRejected = perlinRejected;
+        lastHeightRejected = heightRejected;
+        lastSlopeRejected = slopeRejected;
+        lastValidCandidates = validCandidates;
+        lastSpacingRejected = spacingRejected;
         if (logSummary)
         {
             Debug.Log($"perlin spawner: placed {placed}/{desiredCount} enemies in {attempts} attempts");
@@ -302,6 +332,27 @@ public class PerlinEnemySpawner : MonoBehaviourPunCallbacks
             t.position = pos;
     }
 
+    void OnDestroy()
+    {
+        // Stop all coroutines
+        StopAllCoroutines();
+        
+        // Cleanup spawned enemies
+        Cleanup();
+    }
+    
+    /// <summary>
+    /// Cleanup all spawned enemies and clear collections
+    /// </summary>
+    public void Cleanup()
+    {
+        ApplyClearAll();
+        
+        // Clear collections
+        if (_spawned != null)
+            _spawned.Clear();
+    }
+    
     void OnDrawGizmosSelected()
     {
         if (!drawGizmos) return;

@@ -14,8 +14,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemName: Ship Remnants
   description: A chunk of shipwreck.
-  icon: {fileID: 0}
-  itemType: 0
+  icon: {fileID: 21300000, guid: 4215b7438b58020469a91139624749c0, type: 3}
+  itemType: 7
   maxStack: 1
   healthModifier: 0
   staminaModifier: 0

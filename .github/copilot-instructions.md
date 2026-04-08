@@ -1,66 +1,173 @@
 # Copilot Instructions for AlbuRIOT
 
+Last audited: 2026-04-05
+
 ## Project Overview
-AlbuRIOT is a multiplayer survival game inspired by Philippine mythology. Key features:
-- Procedural map generation (Perlin noise, radial falloff)
-- Behavior Tree AI for enemies (custom movesets, VFX/SFX integration)
-- Power-stealing mechanic (ability gain)
-- Multiplayer networking (co-op/competitive)
-- Culturally inspired assets (visual/audio)
+AlbuRIOT is a Photon PUN 2 co-op survival game (up to 4 players) with procedural maps, quest progression, combat abilities, and mythology-themed enemies.
 
-## Architecture & Major Components
-- `Assets/Scripts/`: Main gameplay logic, organized by domain (Player, Enemies, Managers, UI, etc.)
-- `Assets/Enemies/`: Enemy-specific logic, including AI behavior and attack patterns
-- `TerrainGenerator.cs`: Dynamic terrain/biome/resource generation
-- `EnemyController.cs`: Enemy AI, detection, movement, attack, health/damage
-- `PlayerStats.cs`: Player health, stamina, equipment, stat modification
-- `PrologueManager.cs`: Tutorial flow, scene transitions
-- Power-stealing: Stat changes/ability acquisition in player/enemy scripts
-- Multiplayer: Network logic in Managers/LobbyManager.cs and related scripts
+Core pillars:
+- multiplayer-safe player lifecycle and scene transitions
+- procedural map generation and spawn marker placement
+- quest + inventory integration with mixed shared/per-player objective authority
+- combat, movesets, debuffs, and enemy AI
 
-## Developer Workflows
-- **Player Setup**: See `README_PlayerSetup.md` for prefab/input configuration
-- **Testing**: Validate power-stealing, procedural generation, AI adaptability, multiplayer stability (Unity Play Mode, custom tests)
-- **Debugging**: Common issues (movement, camera, input, tutorial) in `README_PlayerSetup.md`
-- **Customization**: Player/camera/tutorial settings via inspector fields
+## Non-Negotiable Development Rules
+- read the full target script before editing
+- keep all gameplay changes multiplayer-safe (`PhotonView.IsMine`, master authority where required)
+- avoid duplicate spawn/teleport logic; use shared coordinator flows
+- preserve event subscription safety patterns (especially inventory and quest systems)
+- keep comments short, lowercase, and only where clarity is needed
+- when a code change requires Unity setup, include concrete inspector/prefab assignment steps
 
-## Coding Conventions
-- **Unity Assignment**: If code requires Unity assignment (e.g., prefabs, VFX), provide step-by-step Unity instructions
-- **Structure**: Organize code/files for clarity and scalability
-- **Multiplayer**: All gameplay logic must support multiplayer and be scalable
-- **Iteration**: When fixing code, update automatically and keep iterating until resolved
-- **Debugging**: Add debug messages for actions (e.g., attacks)
-- **Comments**: Use all lowercase for comments
-- **Naming**: Use standard Unity/C# conventions
+## Verified Codebase Map
+Primary script root: `Assets/Scripts/`
 
-## Gameplay/Design
-- **Inventory**: Each player has an inventory system
-- **Controls**: WASD movement
-- **Camera**: 3rd person (see Player setup)
-- **UI/UX**: Integrate with storyline.txt and alburiot.txt
-- **Art/Audio**: Reference storyline.txt and alburiot.txt for integration
+Top-level folders currently in use:
+- `Camera/`
+- `Combat/`
+- `Data/`
+- `Editor/`
+- `Encyclopedia/`
+- `Enemies/`
+- `Equipments/`
+- `Inventory/`
+- `Items/`
+- `Managers/`
+- `Map/`
+- `NPC/`
+- `Player/`
+- `UI/`
+- `VFX/`
 
-## Integration Points
-- **External Assets**: Prefabs for trees, rocks, water, characters referenced in generator/setup scripts
-- **Input System**: Unity's new Input System (`PlayerInput.inputactions`)
-- **TextMeshPro**: For UI text (tutorials, damage numbers)
+Important path corrections:
+- `ItemManager` is in `Assets/Scripts/Items/ItemManager.cs` (not `Managers/`)
+- `PlayerCombat` is in `Assets/Scripts/Combat/PlayerCombat.cs` (not `Player/`)
+- there is no `NunoManager` class in this repo
+- `NunoShopManager` exists in `Assets/Scripts/NPC/NunoShopManager.cs`
 
-## Key Files & Directories
-- `PrologueManager.cs`: Tutorial/scene flow
-- `EnemyController.cs`: Enemy AI/combat
-- `TerrainGenerator.cs`: Procedural map generation
-- `PlayerStats.cs`: Player stat logic
-- `README_PlayerSetup.md`: Player setup/troubleshooting
-- `Assets/docs/CHAPTER 1 - 3.md`: Narrative, level design, enemy placements
+## Core Multiplayer And Authority Conventions
+- only local-owned player objects should be moved/input-controlled (`PhotonView.IsMine`)
+- master remains authoritative for shared quest/transition states
+- avoid stale buffered state across scenes; use buffered RPCs intentionally
+- prefer `PlayerRegistry.All` for player iteration
+- use `PlayerRegistry.GetLocalPlayerTransform()` to resolve local player references
 
-## Patterns & Examples
-- Stat modification: `PlayerStats.ApplyEquipment(ItemData item)`
-- Procedural terrain: `TerrainGenerator.GenerateTerrain()`
-- Enemy attack logic: `EnemyController.TryAttack()`
-- Tutorial flow: `PrologueManager.OnTutorialComplete()`
+## Spawn And Transition Architecture
+Single source of truth for spawn placement:
+- `Assets/Scripts/Managers/PlayerSpawnCoordinator.cs`
 
-## Additional Notes
-- Refer to storyline.txt and alburiot.txt for narrative, UI, and art/audio conventions
-- Maintain structured folders for prefabs/assets/scripts
-- All code must be multiplayer-ready and scalable
-- For new features, follow the conventions above and document any Unity assignment steps
+Primary transition callers that must route through coordinator logic:
+- `Assets/Scripts/Managers/MapTransitionManager.cs`
+- `Assets/Scripts/Managers/ProceduralMapLoader.cs`
+- `Assets/Scripts/Managers/CutsceneManager.cs` (player setup flow)
+
+Placement behavior to preserve:
+1. `PlayerSpawnManager.nextSpawnPosition`
+2. scene `SpawnMarker_*`
+3. shared generated positions (`MapResourcesGenerator.GetSharedSpawnPositions()`)
+4. `TutorialSpawnManager.spawnPoints`
+5. `NetworkManager.spawnPoints`
+6. terrain/default fallback
+
+Rules:
+- do not add map-specific spawn handlers
+- do not duplicate spawn selection and teleport rules in transition scripts
+- keep `SpawnMarker_#` naming deterministic
+
+## Inventory, Equipment, And Quest Contract
+Critical files:
+- `Assets/Scripts/Inventory/Inventory.cs`
+- `Assets/Scripts/Equipments/EquipmentManager.cs`
+- `Assets/Scripts/Managers/QuestManager.cs`
+- `Assets/Scripts/Items/ItemPickup.cs`
+- `Assets/Scripts/Items/NetworkItemPickup.cs`
+
+Required patterns:
+- inventory is per-player and synchronized (`MonoBehaviourPun`, `IPunObservable`)
+- use `Inventory.FindLocalInventory()` before fallback discovery
+- `QuestManager.EnsurePlayerInventory()` owns inventory event wiring
+- do not manually subscribe quest logic to inventory events outside `EnsurePlayerInventory()`
+- preserve `lastInventoryRef` subscribe/unsubscribe guard behavior
+- preserve backup reconciliation flow via `ScheduleInventoryReconcile()`
+- before scene transition, cache local inventory/equipment and restore after spawn
+
+## Singletons And Lifecycle Notes
+Common persistent singletons (`Instance` + `DontDestroyOnLoad`) include:
+- `QuestManager`
+- `GameManager`
+- `SceneLoader` (when `persist` is enabled)
+- `NetworkManager`
+- `MapTransitionManager`
+- `ProceduralMapLoader`
+- `MemoryCleanupManager`
+- `MultiplayerScalingManager`
+- `AlbuRIOTIntegrationManager`
+- `ItemManager`
+- `EncyclopediaManager`
+- `NunoShopManager`
+- `LocalUIManager`
+- `LocalInputLocker`
+- `ScreenFader`
+- `NunoDialogueBarUI`
+
+Scene-level or non-singleton reminders:
+- `DialogueManager` is not a global singleton
+- `LoadingScreenManager` uses `DontDestroyOnLoad` but has no `Instance` property
+- `FirstMapLoadingScreen` is scene-scoped despite having static access
+
+## Major Systems Quick Reference
+- combat/damage routing:
+  - `Assets/Scripts/Combat/DamageRelay.cs`
+  - `Assets/Scripts/Combat/EnemyDamageRelay.cs`
+  - `Assets/Scripts/Combat/StatusEffectRelay.cs`
+- abilities and movesets:
+  - `Assets/Scripts/Combat/Abilities/AbilityBase.cs`
+  - `Assets/Scripts/Managers/MovesetManager.cs`
+  - `Assets/Scripts/Items/MovesetData.cs`
+  - `Assets/Scripts/Items/SpecialMoveData.cs`
+- enemies and spawning:
+  - `Assets/Scripts/Enemies/BaseEnemyAI.cs`
+  - `Assets/Scripts/Managers/EnemyManager.cs`
+  - `Assets/Scripts/Managers/MapEnemyDirector.cs`
+  - `Assets/Scripts/Managers/PerlinEnemySpawner.cs`
+  - `Assets/Scripts/Managers/EnemyCampEncounter.cs`
+- map generation:
+  - `Assets/Scripts/Map/TerrainGenerator.cs`
+  - `Assets/Scripts/Map/MapResourcesGenerator.cs`
+- npc/shop/dialogue:
+  - `Assets/Scripts/NPC/NPCDialogueManager.cs`
+  - `Assets/Scripts/NPC/NunoShopManager.cs`
+  - `Assets/Scripts/Managers/DialogueManager.cs`
+
+## MapResourcesGenerator Safety Rules
+- avoid `PhotonNetwork.Destroy` for scene/local PhotonViews (`ViewID <= 0`)
+- non-owner clients should not network-destroy generated objects
+- clear/reconcile `SpawnMarker_*` safely when replaying buffered generation state
+- keep deterministic naming for generated guide/spawn objects
+
+## Input And UI Locking Rules
+- use `LocalInputLocker.Ensure()` with named lock owners
+- use `LocalUIManager.Ensure()` for exclusive panel ownership
+- after transitions/cutscenes, release stale locks and force gameplay cursor state
+
+## Documentation Alignment
+Prefer references that exist in this repo:
+- `Assets/docs/CHAPTER 1 - 3.md`
+- `Assets/docs/01_GAME_DESIGN.md`
+- `Assets/docs/02_TECHNICAL_DOCUMENTATION.md`
+- `Assets/docs/03_SETUP_GUIDES.md`
+- `Assets/docs/TESTING.md`
+
+Do not reference removed or missing docs (for example, root `storyline.txt` or `alburiot.txt` unless they are reintroduced).
+
+## Validation Checklist For Gameplay/Transition Changes
+- no compile errors in Unity/Problems panel
+- host and client both complete scene transition correctly
+- local player is spawned exactly once and placed at expected marker
+- loading UI shows and hides at correct lifecycle points
+- input/camera control is restored after transition/cutscene
+- inventory events fire once (no duplicate subscriptions)
+- collect/talk objectives remain per-player and gated correctly in multiplayer
+
+## Maintenance Rule For Instructions
+When major systems are added, moved, or removed, update this file and keep key path references accurate before merging.

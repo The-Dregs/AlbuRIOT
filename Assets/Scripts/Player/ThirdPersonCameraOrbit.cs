@@ -35,6 +35,7 @@ public class ThirdPersonCameraOrbit : MonoBehaviour
 	private bool rotationLocked = false; // when true, camera follows position but ignores mouse rotation
 	private Vector3 smoothPositionVelocity; // For camera rig position smoothing
 	private Vector3 smoothCameraPositionVelocity; // For camera position smoothing
+	private Photon.Pun.PhotonView parentPhotonView;
 
 	public void SetCameraControlActive(bool value)
 	{
@@ -48,6 +49,7 @@ public class ThirdPersonCameraOrbit : MonoBehaviour
 
 	void Start()
 	{
+		parentPhotonView = GetComponentInParent<Photon.Pun.PhotonView>();
 		if (cameraTransform == null)
 		{
 			Camera cam = GetComponentInChildren<Camera>();
@@ -61,8 +63,7 @@ public class ThirdPersonCameraOrbit : MonoBehaviour
 	void LateUpdate()
 	{
 		// only control camera for local player in multiplayer
-		var pv = GetComponentInParent<Photon.Pun.PhotonView>();
-		if (pv != null && !pv.IsMine) return;
+		if (parentPhotonView != null && !parentPhotonView.IsMine) return;
 		if (target == null || cameraTransform == null) return;
 		if (!cameraControlActive) return;
 
@@ -119,6 +120,32 @@ public class ThirdPersonCameraOrbit : MonoBehaviour
 	{
 		target = playerTarget;
 		cameraTransform = camTransform;
+	}
+
+	/// <summary>
+	/// Instantly positions camera rig and camera at the correct follow position.
+	/// Call after teleporting the player to avoid smooth-damp "swoosh" on first frames.
+	/// </summary>
+	public void SnapToTarget()
+	{
+		if (target == null) return;
+
+		// reset smooth damp velocities so there's no momentum from a previous position
+		smoothPositionVelocity = Vector3.zero;
+		smoothCameraPositionVelocity = Vector3.zero;
+
+		// snap rig to target immediately
+		Vector3 rigPos = target.position + Vector3.up * followHeight;
+		transform.position = rigPos;
+		transform.rotation = Quaternion.Euler(pitch, yaw, 0f);
+
+		// snap camera to correct orbit position
+		if (cameraTransform != null)
+		{
+			Vector3 camOffset = transform.rotation * new Vector3(0, 0, -followDistance);
+			cameraTransform.position = rigPos + camOffset;
+			cameraTransform.LookAt(rigPos + Vector3.up * 0.5f);
+		}
 	}
 }
 

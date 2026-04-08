@@ -30,6 +30,11 @@ public class DataTableManager : MonoBehaviour
         }
     }
     
+    void OnDestroy()
+    {
+        if (Instance == this) Instance = null;
+    }
+
     // Enemy Data Methods
     public EnemyData GetEnemyData(string enemyName)
     {

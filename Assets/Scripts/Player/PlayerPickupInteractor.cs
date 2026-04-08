@@ -4,20 +4,24 @@ public class PlayerPickupInteractor : MonoBehaviour
 {
     public float pickupRadius = 2f;
     public LayerMask pickupLayer;
+    [SerializeField] private float pickupScanInterval = 0.08f;
 
     private PlayerInteractHUD playerHUD;
     private ItemPickup nearbyPickup;
+    private Photon.Pun.PhotonView cachedPhotonView;
+    private float nextScanTime;
+    private readonly Collider[] pickupBuffer = new Collider[32];
 
     void Start()
     {
         playerHUD = GetComponentInChildren<PlayerInteractHUD>(true);
+        cachedPhotonView = GetComponent<Photon.Pun.PhotonView>();
     }
 
     void Update()
     {
         // Only allow local player to interact in multiplayer
-        var pv = GetComponent<Photon.Pun.PhotonView>();
-        if (pv != null && !pv.IsMine) return;
+        if (cachedPhotonView != null && !cachedPhotonView.IsMine) return;
         
         // Don't allow pickups if any UI or dialogue is open
         if (LocalUIManager.Instance != null && LocalUIManager.Instance.IsAnyOpen)
@@ -30,7 +34,11 @@ public class PlayerPickupInteractor : MonoBehaviour
             return;
         }
 
-        CheckNearbyPickups();
+        if (Time.time >= nextScanTime)
+        {
+            CheckNearbyPickups();
+            nextScanTime = Time.time + Mathf.Max(0.03f, pickupScanInterval);
+        }
 
         if (Input.GetKeyDown(KeyCode.E))
         {
@@ -48,18 +56,20 @@ public class PlayerPickupInteractor : MonoBehaviour
 
     void CheckNearbyPickups()
     {
-        Collider[] pickups = Physics.OverlapSphere(transform.position, pickupRadius, pickupLayer);
+        int count = Physics.OverlapSphereNonAlloc(transform.position, pickupRadius, pickupBuffer, pickupLayer, QueryTriggerInteraction.Collide);
         ItemPickup closest = null;
-        float minDist = float.MaxValue;
+        float minDistSqr = float.MaxValue;
         
-        foreach (var col in pickups)
+        for (int i = 0; i < count; i++)
         {
+            var col = pickupBuffer[i];
+            if (col == null) continue;
             var pickup = col.GetComponent<ItemPickup>();
             if (pickup == null || pickup.IsPickedUp) continue;
-            float dist = Vector3.Distance(transform.position, col.transform.position);
-            if (dist < minDist)
+            float distSqr = (transform.position - col.transform.position).sqrMagnitude;
+            if (distSqr < minDistSqr)
             {
-                minDist = dist;
+                minDistSqr = distSqr;
                 closest = pickup;
             }
         }

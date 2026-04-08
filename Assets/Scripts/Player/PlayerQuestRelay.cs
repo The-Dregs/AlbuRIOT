@@ -4,16 +4,26 @@ using UnityEngine;
 // attach to the player prefab so server/master can attribute quest progress to the correct client
 public class PlayerQuestRelay : MonoBehaviourPun
 {
+    [SerializeField] private bool enableDebugLogs = false;
+    private QuestManager cachedQuestManager;
+
+    private QuestManager GetQuestManager()
+    {
+        if (cachedQuestManager == null)
+            cachedQuestManager = FindFirstObjectByType<QuestManager>();
+        return cachedQuestManager;
+    }
+
     [PunRPC]
     public void RPC_AddKillProgress(string enemyName)
     {
         // only execute on owning client
         if (photonView != null && !photonView.IsMine) return;
-        var qm = FindFirstObjectByType<QuestManager>();
+        var qm = GetQuestManager();
         if (qm != null)
         {
             qm.AddProgress_Kill(enemyName);
-            Debug.Log($"quest kill progress (rpc): {enemyName}");
+            if (enableDebugLogs) Debug.Log($"quest kill progress (rpc): {enemyName}");
         }
     }
 
@@ -21,29 +31,46 @@ public class PlayerQuestRelay : MonoBehaviourPun
     public void RPC_AddReachProgress(string areaId)
     {
         if (photonView != null && !photonView.IsMine) return;
-        var qm = FindFirstObjectByType<QuestManager>();
+        var qm = GetQuestManager();
         if (qm != null)
         {
-            // Check current objective type to determine which method to call
+            // Prefer new multi-objective system when available, fall back to legacy quest fields otherwise.
             var q = qm.GetCurrentQuest();
             if (q != null)
             {
                 var obj = q.GetCurrentObjective();
-                if (obj != null && obj.objectiveType == ObjectiveType.FindArea)
+                if (obj != null)
                 {
-                    qm.AddProgress_FindArea(areaId);
-                    Debug.Log($"quest find area progress (rpc): {areaId}");
+                    if (obj.objectiveType == ObjectiveType.FindArea)
+                    {
+                        qm.AddProgress_FindArea(areaId);
+                        if (enableDebugLogs) Debug.Log($"quest find area progress (rpc, objective): {areaId}");
+                    }
+                    else
+                    {
+                        qm.AddProgress_ReachArea(areaId);
+                        if (enableDebugLogs) Debug.Log($"quest reach progress (rpc, objective): {areaId}");
+                    }
                 }
                 else
                 {
-                    qm.AddProgress_ReachArea(areaId);
-                    Debug.Log($"quest reach progress (rpc): {areaId}");
+                    // Legacy single-objective quests (no objectives array)
+                    if (q.objectiveType == ObjectiveType.FindArea)
+                    {
+                        qm.AddProgress_FindArea(areaId);
+                        if (enableDebugLogs) Debug.Log($"quest find area progress (rpc, legacy): {areaId}");
+                    }
+                    else
+                    {
+                        qm.AddProgress_ReachArea(areaId);
+                        if (enableDebugLogs) Debug.Log($"quest reach progress (rpc, legacy): {areaId}");
+                    }
                 }
             }
             else
             {
                 qm.AddProgress_ReachArea(areaId);
-                Debug.Log($"quest reach progress (rpc): {areaId}");
+                if (enableDebugLogs) Debug.Log($"quest reach progress (rpc, no quest): {areaId}");
             }
         }
     }

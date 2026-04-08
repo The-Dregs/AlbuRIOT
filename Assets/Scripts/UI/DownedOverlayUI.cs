@@ -13,6 +13,12 @@ public class DownedOverlayUI : MonoBehaviour
     [Tooltip("Blink speed (cycles per second)")]
     public float blinkSpeed = 1.5f;
     
+    [Header("Timer Display")]
+    [Tooltip("Optional text to show remaining downed time")]
+    public TMPro.TextMeshProUGUI timerText;
+    [Tooltip("Show timer countdown")]
+    public bool showTimer = true;
+    
     [Header("Auto")]
     [Tooltip("If true, will enable the overlay GameObject at runtime even if disabled in inspector.")]
     public bool autoEnableOverlay = true;
@@ -64,12 +70,42 @@ public class DownedOverlayUI : MonoBehaviour
             {
                 overlayImage.gameObject.SetActive(true);
             }
+            
+            // Update timer display
+            if (showTimer && timerText != null && playerStats != null)
+            {
+                float timeRemaining = playerStats.DownedTimeRemaining;
+                if (timeRemaining > 0f)
+                {
+                    int seconds = Mathf.CeilToInt(timeRemaining);
+                    timerText.text = $"Time remaining: {seconds}s";
+                    timerText.gameObject.SetActive(true);
+                    
+                    // Flash red when time is running out (< 5 seconds)
+                    if (seconds <= 5)
+                    {
+                        float flash = (Mathf.Sin(blinkPhase * 2f) + 1f) * 0.5f;
+                        timerText.color = Color.Lerp(Color.white, Color.red, flash);
+                    }
+                    else
+                    {
+                        timerText.color = Color.white;
+                    }
+                }
+                else
+                {
+                    timerText.text = "Time expired!";
+                    timerText.color = Color.red;
+                }
+            }
         }
         else if (wasDowned && !isDowned)
         {
             // Player was revived or respawned, hide overlay
             SetAlpha(0f);
             overlayImage.enabled = false;
+            if (timerText != null)
+                timerText.gameObject.SetActive(false);
         }
         else
         {
@@ -79,6 +115,8 @@ public class DownedOverlayUI : MonoBehaviour
                 SetAlpha(0f);
                 overlayImage.enabled = false;
             }
+            if (timerText != null && timerText.gameObject.activeSelf)
+                timerText.gameObject.SetActive(false);
         }
     }
     
@@ -122,17 +160,8 @@ public class DownedOverlayUI : MonoBehaviour
     
     private PlayerStats FindLocalPlayerStats()
     {
-        // Find local player (in multiplayer, find player with IsMine)
-        PlayerStats[] allPlayers = FindObjectsByType<PlayerStats>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
-        foreach (var stats in allPlayers)
-        {
-            if (stats == null) continue;
-            var pv = stats.GetComponent<Photon.Pun.PhotonView>();
-            if (pv == null) return stats; // Offline mode
-            if (pv.IsMine) return stats;
-        }
-        // Fallback: return first found (for offline)
-        return allPlayers.Length > 0 ? allPlayers[0] : null;
+        var t = PlayerRegistry.GetLocalPlayerTransform();
+        return t != null ? t.GetComponent<PlayerStats>() : null;
     }
     
     void OnValidate()

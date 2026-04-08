@@ -12,9 +12,9 @@ GameObject:
   - component: {fileID: 9066326665977111047}
   - component: {fileID: 516735093015957098}
   - component: {fileID: 2561999691275543753}
-  m_Layer: 0
+  m_Layer: 9
   m_Name: Item_Oar
-  m_TagString: Untagged
+  m_TagString: Pickup
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
@@ -53,6 +53,12 @@ MonoBehaviour:
   rotationSpeed: 0
   bobSpeed: 0
   bobHeight: 0
+  outlineProximityDistance: 5
+  outlineColor: {r: 1, g: 1, b: 0, a: 1}
+  outlineIntensity: 2
+  outlineTransitionSpeed: 5
+  pulsationSpeed: 1
+  maxPulsationIntensity: 0.15
   audioSource: {fileID: 0}
   pickupSound: {fileID: 0}
 --- !u!65 &516735093015957098
@@ -74,8 +80,8 @@ BoxCollider:
   m_ProvidesContacts: 0
   m_Enabled: 1
   serializedVersion: 3
-  m_Size: {x: 1, y: 1, z: 6}
-  m_Center: {x: 0, y: 0, z: 2.8}
+  m_Size: {x: 2, y: 1, z: 7}
+  m_Center: {x: 0, y: 0.49, z: 2.8}
 --- !u!114 &2561999691275543753
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -149,6 +155,10 @@ PrefabInstance:
     - target: {fileID: 919132149155446097, guid: 7556b907ab4f6ac46ac3d01f9f7c441f, type: 3}
       propertyPath: m_Name
       value: boat paddle
+      objectReference: {fileID: 0}
+    - target: {fileID: 919132149155446097, guid: 7556b907ab4f6ac46ac3d01f9f7c441f, type: 3}
+      propertyPath: m_Layer
+      value: 9
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []

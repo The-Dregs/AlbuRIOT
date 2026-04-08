@@ -8,6 +8,10 @@ using System.Collections.Generic;
 [DisallowMultipleComponent]
 public class TiyanakAI : BaseEnemyAI
 {
+    [Header("Basic Attack Exhausted")]
+    [Tooltip("How long the Tiyanak is locked (exhausted) after a basic attack")]
+    public float basicAttackExhaustedTime = 0.5f;
+
     [Header("Lunge Bite")]
     public int lungeDamage = 20;
     public float lungeRange = 1.2f;
@@ -25,26 +29,39 @@ public class TiyanakAI : BaseEnemyAI
     public AudioClip lungeImpactSFX;
     public string lungeWindupTrigger = "LungeWindup";
     public string lungeTrigger = "Lunge";
-    public string skillStoppageTrigger = "SkillStoppage";
 
-    [Header("Skill Selection Tuning")]
-    public float lungeStoppageTime = 1f;
+    [Header("Lunge Exhausted")]
+    [Tooltip("How long the Tiyanak is locked (exhausted) after a lunge")]
+    public float lungeExhaustedTime = 1f;
+    [Tooltip("After exhausted: recovery phase before full speed")]
     public float lungeRecoveryTime = 0.5f;
 
     private float lastLungeTime = -9999f;
     private float lastAnySkillRecoveryEnd = -9999f;
     private float lastAnySkillRecoveryStart = -9999f;
-    private AudioSource audioSource;
     private Coroutine activeAbility;
     private Coroutine basicRoutine;
+    private float activeAbilityFailSafeUntil = -1f;
+    private float basicAttackFailSafeUntil = -1f;
 
     // Debug accessors
     public float LungeCooldownRemaining => Mathf.Max(0f, lungeCooldown - (Time.time - lastLungeTime));
 
-    protected override void InitializeEnemy()
+    public override string GetEffectiveStateForDebug()
     {
-        audioSource = GetComponent<AudioSource>();
-        if (audioSource == null) audioSource = gameObject.AddComponent<AudioSource>();
+        if (activeAbility != null) return "Lunge";
+        if (basicRoutine != null) return "BasicAttack";
+        return base.GetEffectiveStateForDebug();
+    }
+
+    protected override void InitializeEnemy() { }
+
+    protected override void Update()
+    {
+        base.Update();
+        if (isDead) return;
+        if (PhotonNetwork.IsConnected && !PhotonNetwork.OfflineMode && !PhotonNetwork.IsMasterClient) return;
+        ApplyFailSafeRecovery();
     }
 
     protected override void BuildBehaviorTree()
@@ -53,7 +70,7 @@ public class TiyanakAI : BaseEnemyAI
         var hasTarget = new ConditionNode(blackboard, HasTarget, "has_target");
         var targetInDetection = new ConditionNode(blackboard, TargetInDetectionRange, "in_detect_range");
         var moveToTarget = new ActionNode(blackboard, MoveTowardsTarget, "move_to_target");
-        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRange, "in_attack_range");
+        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRangeAndFacing, "in_attack_range_facing");
         var basicAttack = new ActionNode(blackboard, () => { PerformBasicAttack(); return NodeState.Success; }, "basic");
         var canLunge = new ConditionNode(blackboard, CanLunge, "can_lunge");
         var doLunge = new ActionNode(blackboard, () => { StartLunge(); return NodeState.Success; }, "lunge");
@@ -85,35 +102,37 @@ public class TiyanakAI : BaseEnemyAI
         var target = blackboard.Get<Transform>("target");
         if (target == null) return;
 
+        basicAttackFailSafeUntil = Time.time + Mathf.Max(2f, enemyData.attackWindup + basicAttackExhaustedTime + 2f);
         basicRoutine = StartCoroutine(CoBasicAttack(target));
     }
 
     private IEnumerator CoBasicAttack(Transform target)
     {
         BeginAction(AIState.BasicAttack);
+        Quaternion lockedRotation = transform.rotation;
 
-        // Windup animation trigger
-        if (animator != null)
-        {
-            if (HasTrigger(attackWindupTrigger))
-                animator.SetTrigger(attackWindupTrigger);
-            else if (HasTrigger(attackTrigger))
-                animator.SetTrigger(attackTrigger);
-        }
+        // Windup animation trigger (sync to network)
+        if (HasTrigger(attackWindupTrigger))
+            SetTriggerSync(attackWindupTrigger);
+        else if (HasTrigger(attackTrigger))
+            SetTriggerSync(attackTrigger);
+        PlayAttackWindupSfx();
 
-        // Windup phase - freeze movement during windup
+        // Windup phase - lock position and rotation
         float windup = Mathf.Max(0f, enemyData.attackWindup);
         while (windup > 0f)
         {
             windup -= Time.deltaTime;
+            transform.rotation = lockedRotation;
             if (controller != null && controller.enabled)
                 controller.SimpleMove(Vector3.zero);
             yield return null;
         }
 
-        // Impact animation trigger
-        if (animator != null && HasTrigger(attackImpactTrigger))
-            animator.SetTrigger(attackImpactTrigger);
+        // Impact animation trigger (sync to network)
+        if (HasTrigger(attackImpactTrigger))
+            SetTriggerSync(attackImpactTrigger);
+        PlayAttackImpactSfx();
 
         // Apply damage after windup
         float radius = Mathf.Max(0.8f, enemyData.attackRange);
@@ -122,22 +141,28 @@ public class TiyanakAI : BaseEnemyAI
         foreach (var c in cols)
         {
             var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null) ps.TakeDamage(enemyData.basicDamage);
+            if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, enemyData.basicDamage);
         }
 
-        // Post-stop using attackMoveLock duration
-        float post = Mathf.Max(0.1f, enemyData.attackMoveLock);
-        while (post > 0f)
+        // Exhausted phase - lock position, rotation, set Exhausted animator
+        float exhausted = Mathf.Max(0.1f, basicAttackExhaustedTime);
+        if (exhausted > 0f && HasBool("Exhausted")) SetBoolSync("Exhausted", true);
+        while (exhausted > 0f)
         {
-            post -= Time.deltaTime;
+            exhausted -= Time.deltaTime;
+            transform.rotation = lockedRotation;
             if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
             yield return null;
         }
+        if (HasBool("Exhausted")) SetBoolSync("Exhausted", false);
 
         lastAttackTime = Time.time;
-        attackLockTimer = enemyData.attackMoveLock;
+        attackLockTimer = basicAttackExhaustedTime;
         basicRoutine = null;
+        basicAttackFailSafeUntil = -1f;
         EndAction();
+        if (basicAttackExhaustedTime > 0f)
+            globalBusyTimer = Mathf.Max(globalBusyTimer, basicAttackExhaustedTime);
     }
 
     protected override bool TrySpecialAbilities()
@@ -164,132 +189,132 @@ public class TiyanakAI : BaseEnemyAI
     {
         if (activeAbility != null) return;
         if (enemyData != null) lastAttackTime = Time.time;
+        activeAbilityFailSafeUntil = Time.time + Mathf.Max(3f, lungeWindup + lungeDuration + lungeExhaustedTime + lungeRecoveryTime + 2f);
         activeAbility = StartCoroutine(CoLunge());
     }
 
     private IEnumerator CoLunge()
     {
         BeginAction(AIState.Special1);
-
-        // Capture lunge direction before windup
-        var target = blackboard.Get<Transform>("target");
-        Vector3 lungeDirection = transform.forward;
-        if (target != null)
+        bool actionEnded = false;
+        try
         {
-            Vector3 toTarget = new Vector3(target.position.x, transform.position.y, target.position.z) - transform.position;
-            if (toTarget.sqrMagnitude > 0.0001f)
+            // Capture lunge direction before windup
+            var target = blackboard.Get<Transform>("target");
+            Vector3 lungeDirection = transform.forward;
+            if (target != null)
             {
-                lungeDirection = toTarget.normalized;
+                Vector3 toTarget = new Vector3(target.position.x, transform.position.y, target.position.z) - transform.position;
+                if (toTarget.sqrMagnitude > 0.0001f)
+                {
+                    lungeDirection = toTarget.normalized;
+                    transform.rotation = Quaternion.LookRotation(lungeDirection);
+                }
+            }
+
+            // Windup animation trigger (sync to network)
+            if (HasTrigger(lungeWindupTrigger)) SetTriggerSync(lungeWindupTrigger);
+            else if (HasTrigger(lungeTrigger)) SetTriggerSync(lungeTrigger);
+            PlaySfx(lungeWindupSFX);
+            GameObject wind = null;
+            if (lungeWindupVFX != null)
+            {
+                wind = Instantiate(lungeWindupVFX, transform);
+                wind.transform.localPosition = lungeWindupVFXOffset;
+                if (lungeWindupVFXScale > 0f) wind.transform.localScale = Vector3.one * lungeWindupVFXScale;
+            }
+
+            // Windup phase - lock rotation
+            float windup = Mathf.Max(0f, lungeWindup);
+            while (windup > 0f)
+            {
+                windup -= Time.deltaTime;
                 transform.rotation = Quaternion.LookRotation(lungeDirection);
+                if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+                yield return null;
             }
-        }
+            if (wind != null) Destroy(wind);
 
-        // Windup animation trigger
-        if (animator != null && HasTrigger(lungeWindupTrigger)) animator.SetTrigger(lungeWindupTrigger);
-        else if (animator != null && HasTrigger(lungeTrigger)) animator.SetTrigger(lungeTrigger);
-        if (audioSource != null && lungeWindupSFX != null) audioSource.PlayOneShot(lungeWindupSFX);
-        GameObject wind = null;
-        if (lungeWindupVFX != null)
-        {
-            wind = Instantiate(lungeWindupVFX, transform);
-            wind.transform.localPosition = lungeWindupVFXOffset;
-            if (lungeWindupVFXScale > 0f) wind.transform.localScale = Vector3.one * lungeWindupVFXScale;
-        }
-
-        // Windup phase - lock rotation
-        float windup = Mathf.Max(0f, lungeWindup);
-        while (windup > 0f)
-        {
-            windup -= Time.deltaTime;
-            transform.rotation = Quaternion.LookRotation(lungeDirection);
-            if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
-            yield return null;
-        }
-        if (wind != null) Destroy(wind);
-
-        // Impact VFX/SFX
-        if (lungeImpactVFX != null)
-        {
-            var fx = Instantiate(lungeImpactVFX, transform);
-            fx.transform.localPosition = lungeImpactVFXOffset;
-            if (lungeImpactVFXScale > 0f) fx.transform.localScale = Vector3.one * lungeImpactVFXScale;
-        }
-        if (audioSource != null && lungeImpactSFX != null) audioSource.PlayOneShot(lungeImpactSFX);
-
-        // Lunge animation trigger
-        if (animator != null && HasTrigger(lungeTrigger)) animator.SetTrigger(lungeTrigger);
-
-        // Lunge forward
-        float t = Mathf.Max(0.05f, lungeDuration);
-        HashSet<PlayerStats> hitPlayers = new HashSet<PlayerStats>();
-        while (t > 0f)
-        {
-            t -= Time.deltaTime;
-            if (controller != null && controller.enabled)
-                controller.Move(lungeDirection * lungeSpeed * Time.deltaTime);
-
-            // Check for hits during lunge - ONE DAMAGE PER PLAYER
-            if (target != null && Vector3.Distance(transform.position, target.position) <= lungeRange)
+            // Impact VFX/SFX
+            if (lungeImpactVFX != null)
             {
-                var ps = target.GetComponent<PlayerStats>();
-                if (ps != null && !hitPlayers.Contains(ps))
-                {
-                    ps.TakeDamage(lungeDamage);
-                    hitPlayers.Add(ps);
-                }
+                var fx = Instantiate(lungeImpactVFX, transform);
+                fx.transform.localPosition = lungeImpactVFXOffset;
+                if (lungeImpactVFXScale > 0f) fx.transform.localScale = Vector3.one * lungeImpactVFXScale;
             }
-            yield return null;
-        }
+            PlaySfx(lungeImpactSFX);
 
-        // Stoppage recovery (AI frozen after attack)
-        if (lungeStoppageTime > 0f)
-        {
-            if (animator != null && HasTrigger(skillStoppageTrigger)) animator.SetTrigger(skillStoppageTrigger);
+            // Lunge animation trigger (sync to network)
+            if (HasTrigger(lungeTrigger)) SetTriggerSync(lungeTrigger);
 
-            float stopTimer = lungeStoppageTime;
-            float quarterStoppage = lungeStoppageTime * 0.75f;
-
-            while (stopTimer > 0f)
+            // Lunge forward
+            float t = Mathf.Max(0.05f, lungeDuration);
+            HashSet<PlayerStats> hitPlayers = new HashSet<PlayerStats>();
+            while (t > 0f)
             {
-                stopTimer -= Time.deltaTime;
+                t -= Time.deltaTime;
                 if (controller != null && controller.enabled)
-                    controller.SimpleMove(Vector3.zero);
+                    controller.Move(lungeDirection * lungeSpeed * Time.deltaTime);
 
-                // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
-                if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
+                // Check for hits during lunge - ONE DAMAGE PER PLAYER
+                if (target != null && Vector3.Distance(transform.position, target.position) <= lungeRange)
                 {
-                    animator.SetBool("Exhausted", true);
+                    var ps = target.GetComponent<PlayerStats>();
+                    if (ps != null && !hitPlayers.Contains(ps))
+                    {
+                        DamageRelay.ApplyToPlayer(ps.gameObject, lungeDamage);
+                        hitPlayers.Add(ps);
+                    }
                 }
-
                 yield return null;
             }
 
-            // Clear Exhausted boolean parameter
-            if (animator != null) animator.SetBool("Exhausted", false);
-        }
-
-        // End busy state so AI can move during recovery
-        EndAction();
-
-        // Recovery time (AI can move but skill still on cooldown, gradual speed recovery)
-        if (lungeRecoveryTime > 0f)
-        {
-            lastAnySkillRecoveryStart = Time.time;
-            float recovery = lungeRecoveryTime;
-            while (recovery > 0f)
+            // Stoppage recovery (AI frozen after attack)
+            if (lungeExhaustedTime > 0f)
             {
-                recovery -= Time.deltaTime;
-                yield return null;
+                SetBoolSync("Exhausted", true);
+                float stopTimer = lungeExhaustedTime;
+                while (stopTimer > 0f)
+                {
+                    stopTimer -= Time.deltaTime;
+                    if (controller != null && controller.enabled)
+                        controller.SimpleMove(Vector3.zero);
+                    yield return null;
+                }
+                SetBoolSync("Exhausted", false);
             }
-            lastAnySkillRecoveryEnd = Time.time;
-        }
-        else
-        {
-            lastAnySkillRecoveryEnd = Time.time;
-        }
 
-        activeAbility = null;
-        lastLungeTime = Time.time;
+            // End busy state so AI can move during recovery
+            EndAction();
+            actionEnded = true;
+
+            // Recovery time (AI can move but skill still on cooldown, gradual speed recovery)
+            if (lungeRecoveryTime > 0f)
+            {
+                lastAnySkillRecoveryStart = Time.time;
+                float recovery = lungeRecoveryTime;
+                while (recovery > 0f)
+                {
+                    recovery -= Time.deltaTime;
+                    yield return null;
+                }
+                lastAnySkillRecoveryEnd = Time.time;
+            }
+            else
+            {
+                lastAnySkillRecoveryEnd = Time.time;
+            }
+
+            lastLungeTime = Time.time;
+        }
+        finally
+        {
+            SetBoolSync("Exhausted", false);
+            if (!actionEnded && isBusy)
+                EndAction();
+            activeAbility = null;
+            activeAbilityFailSafeUntil = -1f;
+        }
     }
 
     #endregion
@@ -324,5 +349,33 @@ public class TiyanakAI : BaseEnemyAI
         }
 
         return baseSpeed;
+    }
+
+    private void ApplyFailSafeRecovery()
+    {
+        // Kapre-style unlock: if no action coroutine is active, never stay busy.
+        if (isBusy && activeAbility == null && basicRoutine == null)
+        {
+            SetBoolSync("Exhausted", false);
+            EndAction();
+        }
+
+        if (basicRoutine != null && basicAttackFailSafeUntil > 0f && Time.time > basicAttackFailSafeUntil)
+        {
+            StopCoroutine(basicRoutine);
+            basicRoutine = null;
+            basicAttackFailSafeUntil = -1f;
+            if (isBusy) EndAction();
+        }
+
+        if (activeAbility != null && activeAbilityFailSafeUntil > 0f && Time.time > activeAbilityFailSafeUntil)
+        {
+            StopCoroutine(activeAbility);
+            activeAbility = null;
+            activeAbilityFailSafeUntil = -1f;
+            SetBoolSync("Exhausted", false);
+            if (isBusy) EndAction();
+            lastAnySkillRecoveryEnd = Time.time;
+        }
     }
 }

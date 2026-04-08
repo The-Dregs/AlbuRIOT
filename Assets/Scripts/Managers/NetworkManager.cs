@@ -11,10 +11,20 @@ public class NetworkManager : MonoBehaviourPunCallbacks
     public int maxPlayersPerRoom = 4;
     [Tooltip("When true, connects to Photon on Start(). Disable for dev to default to Offline mode.")]
     public bool autoConnectOnStart = false;
+    [Tooltip("When true and autoConnectOnStart is false, force offline mode on Start for local testing.")]
+    public bool startInOfflineModeWhenNotAutoConnecting = false;
     
     [Header("Player Management")]
     public GameObject playerPrefab;
+    [Tooltip("Optional. Player 2 prefab for 2nd spawn.")]
+    public GameObject playerPrefab2;
+    [Tooltip("Optional. Player 3 prefab for 3rd spawn.")]
+    public GameObject playerPrefab3;
+    [Tooltip("Optional. Player 4 prefab for 4th spawn.")]
+    public GameObject playerPrefab4;
     public Transform[] spawnPoints;
+    [Tooltip("If true, auto-spawn local player immediately in OnJoinedRoom. Keep false when using cutscene-driven or coordinator-driven spawning.")]
+    public bool autoSpawnOnJoinedRoom = false;
     
     [Header("Game State")]
     public bool isGameStarted = false;
@@ -61,6 +71,30 @@ public class NetworkManager : MonoBehaviourPunCallbacks
             movesetManager = FindFirstObjectByType<MovesetManager>();
     }
     
+    void OnDestroy()
+    {
+        if (Instance == this)
+        {
+            Instance = null;
+        }
+        
+        // Stop all coroutines to prevent leaks
+        StopAllCoroutines();
+
+        // safety: disconnect photon if still connected during shutdown
+        if (GlobalPlaymodeCleanup.IsQuitting && PhotonNetwork.IsConnected)
+        {
+            try { PhotonNetwork.Disconnect(); } catch { }
+        }
+    }
+
+    private void OnApplicationQuit()
+    {
+        // Ensure Photon is fully disconnected when the application exits so
+        // no stale room / player state carries over into the next run.
+        ForceDisconnectAndCleanup("[NetworkManager] OnApplicationQuit");
+    }
+    
     void Start()
     {
         PhotonNetwork.AutomaticallySyncScene = true;
@@ -85,7 +119,7 @@ public class NetworkManager : MonoBehaviourPunCallbacks
         // dev-friendly default: offline unless explicitly connecting
         if (!autoConnectOnStart)
         {
-            if (!PhotonNetwork.IsConnected && !PhotonNetwork.OfflineMode)
+            if (startInOfflineModeWhenNotAutoConnecting && !PhotonNetwork.IsConnected && !PhotonNetwork.OfflineMode)
             {
                 PhotonNetwork.OfflineMode = true;
                 Debug.Log("NetworkManager: Started in Offline Mode (dev)");
@@ -128,8 +162,11 @@ public class NetworkManager : MonoBehaviourPunCallbacks
         Debug.Log($"Joined room: {PhotonNetwork.CurrentRoom.Name}");
         JoinedRoomEvent?.Invoke();
         
-        // Spawn player
-        SpawnPlayer();
+        // optional immediate spawn; disabled by default to avoid overriding cutscene/tutorial spawn flows
+        if (autoSpawnOnJoinedRoom)
+        {
+            SpawnPlayer();
+        }
         
         // Sync game state
         if (PhotonNetwork.IsMasterClient)
@@ -142,6 +179,48 @@ public class NetworkManager : MonoBehaviourPunCallbacks
     {
         Debug.Log("Left room");
         LeftRoomEvent?.Invoke();
+        
+        // Perform cleanup on room leave
+        if (MemoryCleanupManager.Instance != null)
+        {
+            MemoryCleanupManager.Instance.CleanupOnRoomLeave();
+        }
+        
+        // Stop all coroutines
+        StopAllCoroutines();
+        
+        // Clear event subscriptions to prevent leaks
+        ClearEventSubscriptions();
+    }
+    
+    private void ClearEventSubscriptions()
+    {
+        // Clear all event handlers
+        ConnectedToMasterEvent = null;
+        JoinedRoomEvent = null;
+        LeftRoomEvent = null;
+        OnPlayerJoined = null;
+        OnPlayerLeft = null;
+        OnGameStarted = null;
+        OnGamePaused = null;
+        OnGameResumed = null;
+    }
+    
+    public override void OnDisconnected(DisconnectCause cause)
+    {
+        Debug.Log($"Disconnected from Photon: {cause}");
+        
+        // Perform cleanup on disconnect
+        if (MemoryCleanupManager.Instance != null)
+        {
+            MemoryCleanupManager.Instance.CleanupOnRoomLeave();
+        }
+        
+        // Stop all coroutines
+        StopAllCoroutines();
+        
+        // Clear event subscriptions
+        ClearEventSubscriptions();
     }
     
     public override void OnPlayerEnteredRoom(Player newPlayer)
@@ -184,18 +263,65 @@ public class NetworkManager : MonoBehaviourPunCallbacks
             Debug.LogError("Player prefab not assigned!");
             return;
         }
+
+        // prevent duplicate local spawns
+        var existingLocal = PlayerSpawnCoordinator.FindLocalPlayer();
+        if (existingLocal != null)
+        {
+            Debug.Log("[NetworkManager] Local player already exists, skipping SpawnPlayer.");
+            return;
+        }
         
         Vector3 spawnPosition = GetSpawnPosition();
-        GameObject player = PhotonNetwork.Instantiate(playerPrefab.name, spawnPosition, Quaternion.identity);
+        GameObject prefabToSpawn = GetPlayerPrefabForSpawnIndex();
+
+        // only use Photon instantiate when in a room (or offline mode).
+        if (PhotonNetwork.IsConnected && !PhotonNetwork.OfflineMode && !PhotonNetwork.InRoom)
+        {
+            Debug.LogWarning("[NetworkManager] SpawnPlayer requested while connected but not in room. Skipping Photon instantiate.");
+            return;
+        }
+
+        GameObject player;
+        if (PhotonNetwork.IsConnected && PhotonNetwork.InRoom)
+        {
+            player = PhotonNetwork.Instantiate(prefabToSpawn.name, spawnPosition, Quaternion.identity);
+        }
+        else
+        {
+            player = Instantiate(prefabToSpawn, spawnPosition, Quaternion.identity);
+        }
         
         Debug.Log($"Player spawned at: {spawnPosition}");
     }
     
+    private int GetLocalSpawnIndex(int count)
+    {
+        return PlayerRegistry.GetLocalJoinOrderIndex(count);
+    }
+
+    private GameObject GetPlayerPrefabForSpawnIndex()
+    {
+        int index = GetLocalSpawnIndex(4);
+        return GetPlayerPrefabByIndex(index);
+    }
+
+    private GameObject GetPlayerPrefabByIndex(int index)
+    {
+        switch (index)
+        {
+            case 1: return playerPrefab2 != null ? playerPrefab2 : playerPrefab;
+            case 2: return playerPrefab3 != null ? playerPrefab3 : playerPrefab;
+            case 3: return playerPrefab4 != null ? playerPrefab4 : playerPrefab;
+            default: return playerPrefab;
+        }
+    }
+
     private Vector3 GetSpawnPosition()
     {
         if (spawnPoints != null && spawnPoints.Length > 0)
         {
-            int spawnIndex = PhotonNetwork.PlayerList.Length - 1;
+            int spawnIndex = GetLocalSpawnIndex(spawnPoints.Length);
             if (spawnIndex < spawnPoints.Length)
             {
                 return spawnPoints[spawnIndex].position;
@@ -356,6 +482,53 @@ public class NetworkManager : MonoBehaviourPunCallbacks
     public void LeaveRoom()
     {
         PhotonNetwork.LeaveRoom();
+    }
+
+    /// <summary>
+    /// Centralized "hard reset" for Photon state used by exit flows.
+    /// Ensures we leave any room, disconnect, stop coroutines and clear events.
+    /// Safe to call multiple times.
+    /// </summary>
+    public static void ForceDisconnectAndCleanup(string caller = "")
+    {
+        if (Instance != null)
+        {
+            Instance.InternalForceDisconnectAndCleanup(caller);
+        }
+        else
+        {
+            if (!string.IsNullOrEmpty(caller))
+            {
+                Debug.Log($"[NetworkManager] ForceDisconnectAndCleanup (no instance) from {caller}");
+            }
+            if (PhotonNetwork.IsConnected)
+            {
+                PhotonNetwork.Disconnect();
+            }
+        }
+    }
+
+    private void InternalForceDisconnectAndCleanup(string caller)
+    {
+        if (!string.IsNullOrEmpty(caller))
+        {
+            Debug.Log($"[NetworkManager] ForceDisconnectAndCleanup called from {caller}");
+        }
+
+        // Leave room first (if any), then disconnect.
+        if (PhotonNetwork.InRoom)
+        {
+            try { PhotonNetwork.LeaveRoom(); } catch { }
+        }
+
+        if (PhotonNetwork.IsConnected)
+        {
+            try { PhotonNetwork.Disconnect(); } catch { }
+        }
+
+        // Stop any running network-related coroutines and clear callbacks.
+        StopAllCoroutines();
+        ClearEventSubscriptions();
     }
     
     #endregion

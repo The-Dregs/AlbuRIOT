@@ -4,13 +4,20 @@ using TMPro;
 [DisallowMultipleComponent]
 public class EnemyDebugOverhead : MonoBehaviour
 {
+	/// <summary>Global toggle for all enemy debug overlays. F8 toggles this.</summary>
+	public static bool GlobalShowDebugOverlay { get; private set; } = false;
+
 	[SerializeField] private BaseEnemyAI enemy;
 	[SerializeField] private bool enable = true;
 	[SerializeField] private float yOffset = 2.2f;
 	[SerializeField] private Color color = Color.yellow;
 	[SerializeField] private int fontSize = 3;
 
+	private static int _lastF8Frame = -1;
 	private TextMeshPro tmp;
+
+	/// <summary>Enable or disable this enemy's debug overlay (still requires F8 to show).</summary>
+	public void SetEnable(bool value) { enable = value; }
 
 	private void Awake()
 	{
@@ -19,12 +26,20 @@ public class EnemyDebugOverhead : MonoBehaviour
 
 	private void Update()
 	{
-		if (!enable || enemy == null)
+		// F8 toggles global overlay (only process once per frame)
+		if (Input.GetKeyDown(KeyCode.F8) && Time.frameCount != _lastF8Frame)
 		{
-			DestroyIfExists();
+			_lastF8Frame = Time.frameCount;
+			GlobalShowDebugOverlay = !GlobalShowDebugOverlay;
+		}
+
+		if (!enable || !GlobalShowDebugOverlay || enemy == null)
+		{
+			if (tmp != null) tmp.gameObject.SetActive(false);
 			return;
 		}
 		EnsureTMP();
+		if (tmp != null) tmp.gameObject.SetActive(true);
 		UpdateBillboard();
 	}
 
@@ -42,6 +57,8 @@ public class EnemyDebugOverhead : MonoBehaviour
 		tmp.textWrappingMode = TextWrappingModes.NoWrap;
 	}
 
+	private System.Text.StringBuilder textBuilder = new System.Text.StringBuilder(256);
+	
 	private void UpdateBillboard()
 	{
 		if (tmp == null) return;
@@ -53,120 +70,127 @@ public class EnemyDebugOverhead : MonoBehaviour
 		float hp = enemy.HealthPercentage;
 		var target = enemy.Target;
 		float dist = target != null ? Vector3.Distance(enemy.transform.position, target.position) : -1f;
-		string state = enemy.CurrentState.ToString();
+		string state = enemy.GetEffectiveStateForDebug();
+		Vector3 tgtPos = target != null ? target.position : Vector3.zero;
 		float basicCd = Mathf.Max(enemy.BasicCooldownRemaining, enemy.BasicCooldownTime);
-		string header = target != null ? $"{state}  tgt:{dist:F1}  hp:{hp:P0}" : $"{state}  hp:{hp:P0}";
+		
+		textBuilder.Clear();
+		textBuilder.Append(state).Append("  ");
+		if (target != null)
+		{
+			textBuilder.Append("tgt:").Append(dist.ToString("F1")).Append("  ");
+		}
+		textBuilder.Append("hp:").Append(hp.ToString("P0"));
+		string header = textBuilder.ToString();
 
-		// If this is an Amomongo, show ability cooldowns and buffs
+		textBuilder.Clear();
+		textBuilder.Append(header).Append("\n").Append(enemy.DebugDetailString).Append("\nCD basic:").Append(basicCd.ToString("F1"));
+		
 		var amo = enemy as AmomongoAI;
 		if (amo != null)
 		{
-			string cds = $"CD basic:{basicCd:F1}  slam:{amo.SlamCooldownRemaining:F1}  berserk:{amo.BerserkCooldownRemaining:F1}";
-			string buffs = $"buffs Dmg:{(amo.IsBerserk ? "on" : "off")}({amo.BerserkTimeRemaining:F1})  Spd:{(amo.IsBerserk ? "on" : "off")}({amo.BerserkTimeRemaining:F1})  Sta:off(-)  Hp:off(-)";
-			tmp.text = header + "\n" + cds + "\n" + buffs;
+			textBuilder.Append("  slam:").Append(amo.SlamCooldownRemaining.ToString("F1"))
+				.Append("  berserk:").Append(amo.BerserkCooldownRemaining.ToString("F1"))
+				.Append("\nbuffs Dmg:").Append(amo.IsBerserk ? "on" : "off")
+				.Append("(").Append(amo.BerserkTimeRemaining.ToString("F1")).Append(")  Spd:")
+				.Append(amo.IsBerserk ? "on" : "off")
+				.Append("(").Append(amo.BerserkTimeRemaining.ToString("F1")).Append(")  Sta:off(-)  Hp:off(-)");
 		}
 		else
 		{
-			// If this is a Bungisngis, show ability cooldowns
 			var bung = enemy as BungisngisAI;
 			if (bung != null)
 			{
-				string cds = $"CD basic:{basicCd:F1}  laugh:{bung.LaughCooldownRemaining:F1}  pound:{bung.PoundCooldownRemaining:F1}";
-				tmp.text = header + "\n" + cds;
+				textBuilder.Append("  laugh:").Append(bung.LaughCooldownRemaining.ToString("F1"))
+					.Append("  pound:").Append(bung.PoundCooldownRemaining.ToString("F1"));
 			}
 			else
 			{
-				// If this is a Kapre, show ability cooldowns
 				var kapre = enemy as KapreAI;
 				if (kapre != null)
 				{
-					string cds = $"CD basic:{basicCd:F1}  vanish:{kapre.VanishCooldownRemaining:F1}  treeslam:{kapre.TreeSlamCooldownRemaining:F1}";
-					tmp.text = header + "\n" + cds;
+					textBuilder.Append("  vanish:").Append(kapre.VanishCooldownRemaining.ToString("F1"))
+						.Append("  treeslam:").Append(kapre.TreeSlamCooldownRemaining.ToString("F1"));
 				}
 				else
 				{
-					// If this is a Shadow-Touched Diwata, show ability cooldowns
 					var shadowDiwata = enemy as ShadowTouchedDiwataAI;
 					if (shadowDiwata != null)
 					{
-						string cds = $"CD basic:{basicCd:F1}  eclipseveil:{shadowDiwata.EclipseVeilCooldownRemaining:F1}  lament:{shadowDiwata.LamentCooldownRemaining:F1}";
-						tmp.text = header + "\n" + cds;
+						textBuilder.Append("  eclipseveil:").Append(shadowDiwata.EclipseVeilCooldownRemaining.ToString("F1"))
+							.Append("  lament:").Append(shadowDiwata.LamentCooldownRemaining.ToString("F1"));
 					}
 					else
 					{
-						// If this is an Aswang Unit, show ability cooldowns
 						var aswang = enemy as AswangUnitAI;
 						if (aswang != null)
 						{
-							string cds = $"CD basic:{basicCd:F1}  pounce:{aswang.PounceCooldownRemaining:F1}";
-							tmp.text = header + "\n" + cds;
+							textBuilder.Append("  pounce:").Append(aswang.PounceCooldownRemaining.ToString("F1"));
 						}
 						else
 						{
-							// If this is an Aswang Queen, show ability cooldowns
 							var aswangQueen = enemy as AswangQueenAI;
 							if (aswangQueen != null)
 							{
-								string cds = $"CD basic:{basicCd:F1}  pounce:{aswangQueen.PounceCooldownRemaining:F1}  swarm:{aswangQueen.SwarmCooldownRemaining:F1}";
-								tmp.text = header + "\n" + cds;
+								textBuilder.Append("  pounce:").Append(aswangQueen.PounceCooldownRemaining.ToString("F1"))
+									.Append("  swarm:").Append(aswangQueen.SwarmCooldownRemaining.ToString("F1"));
 							}
 							else
 							{
-								// If this is a Manananggal, show ability cooldowns
 								var manananggal = enemy as ManananggalAI;
 								if (manananggal != null)
 								{
-									string cds = $"CD basic:{basicCd:F1}  dive:{manananggal.DiveCooldownRemaining:F1}";
-									tmp.text = header + "\n" + cds;
+									textBuilder.Append("  dive:").Append(manananggal.DiveCooldownRemaining.ToString("F1"));
 								}
 								else
 								{
-									// If this is a Tiyanak, show ability cooldowns
 									var tiyanak = enemy as TiyanakAI;
 									if (tiyanak != null)
 									{
-										string cds = $"CD basic:{basicCd:F1}  lunge:{tiyanak.LungeCooldownRemaining:F1}";
-										tmp.text = header + "\n" + cds;
+										textBuilder.Append("  lunge:").Append(tiyanak.LungeCooldownRemaining.ToString("F1"));
 									}
 									else
 									{
-										// If this is a Sigbin, show ability cooldowns
 										var sigbin = enemy as SigbinAI;
 										if (sigbin != null)
 										{
-											string cds = $"CD basic:{basicCd:F1}  backstep:{sigbin.BackstepCooldownRemaining:F1}";
-											tmp.text = header + "\n" + cds;
+											textBuilder.Append("  backstep:").Append(sigbin.BackstepCooldownRemaining.ToString("F1"));
+											textBuilder.Append("\nspd:").Append(sigbin.DebugMoveSpeed.ToString("F1"));
+											textBuilder.Append(" vel:").Append(enemy.DebugVelocityMagnitude.ToString("F1"));
+											if (enemy.DebugIsMoveBlocked) textBuilder.Append(" [").Append(enemy.DebugBlockReason).Append("]");
+											if (target != null) textBuilder.Append("\ntgt:").Append(tgtPos.ToString("F0"));
+											if (sigbin.DebugHasActiveAbility) textBuilder.Append("  [BACKSTEP]");
+											if (sigbin.DebugHasBasicRoutine) textBuilder.Append("  [BASIC]");
 										}
 										else
 										{
-											// If this is a Sirena, show ability cooldowns
 											var sirena = enemy as SirenaAI;
 											if (sirena != null)
 											{
-												string cds = $"CD basic:{basicCd:F1}  burst:{sirena.BurstCooldownRemaining:F1}";
-												tmp.text = header + "\n" + cds;
+												textBuilder.Append("  burst:").Append(sirena.BurstCooldownRemaining.ToString("F1"));
 											}
 											else
 											{
-												// If this is a Busaw, show ability cooldowns
 												var busaw = enemy as BusawAI;
 												if (busaw != null)
 												{
-													string cds = $"CD basic:{basicCd:F1}  grasp:{busaw.GraspCooldownRemaining:F1}";
-													tmp.text = header + "\n" + cds;
+													textBuilder.Append("  grasp:").Append(busaw.GraspCooldownRemaining.ToString("F1"));
 												}
 												else
 												{
-													// If this is a Wakwak, show ability cooldowns
 													var wakwak = enemy as WakwakAI;
 													if (wakwak != null)
 													{
-														string cds = $"CD basic:{basicCd:F1}  descent:{wakwak.DescentCooldownRemaining:F1}";
-														tmp.text = header + "\n" + cds;
+														textBuilder.Append("  descent:").Append(wakwak.DescentCooldownRemaining.ToString("F1"));
 													}
 													else
 													{
-														tmp.text = header + $"\nCD basic:{basicCd:F1}";
+														var berberoka = enemy as BerberokaAI;
+														if (berberoka != null)
+														{
+															textBuilder.Append("  vortex:").Append(berberoka.VortexCooldownRemaining.ToString("F1"))
+																.Append("  flood:").Append(berberoka.FloodCooldownRemaining.ToString("F1"));
+														}
 													}
 												}
 											}
@@ -179,6 +203,8 @@ public class EnemyDebugOverhead : MonoBehaviour
 				}
 			}
 		}
+		
+		tmp.text = textBuilder.ToString();
 	}
 
 	private void OnDisable()

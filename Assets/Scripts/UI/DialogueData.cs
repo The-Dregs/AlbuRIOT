@@ -15,6 +15,8 @@ public class DialogueData : ScriptableObject
         public VideoClip foregroundClip;
         [Min(0f)] public float delayBeforeText = 0f;
         public bool loopClips = false;
+        [Tooltip("Optional sound clip to play when this dialogue line is shown")]
+        public AudioClip soundClip;
     }
 
     public DialogueLine[] lines;

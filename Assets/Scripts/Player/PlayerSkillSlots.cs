@@ -7,6 +7,14 @@ using static PowerStealManager;
 
 public class PlayerSkillSlots : MonoBehaviour
 {
+    [Header("Debug")]
+    [SerializeField] private bool enableDebugLogs = false;
+
+    private void LogVerbose(string message)
+    {
+        if (enableDebugLogs) Debug.Log(message);
+    }
+
     void Update()
     {
         UpdateCooldowns();
@@ -53,7 +61,7 @@ public class PlayerSkillSlots : MonoBehaviour
                         {
                             slotCurrentCharges[i]++;
                             slotChargeRechargeTimers[i] = 0f;
-                            Debug.Log($"[PlayerSkillSlots] Slot {i + 1} ({skillSlots[i].powerName}) regained charge: {slotCurrentCharges[i]}/{skillSlots[i].maxCharges}");
+                            LogVerbose($"[PlayerSkillSlots] Slot {i + 1} ({skillSlots[i].powerName}) regained charge: {slotCurrentCharges[i]}/{skillSlots[i].maxCharges}");
                         }
                     }
                 }
@@ -69,7 +77,11 @@ public class PlayerSkillSlots : MonoBehaviour
         if (slotCooldownTimers.ContainsKey(slotIndex) && slotCooldownTimers[slotIndex] > 0f)
             return false;
         
-        // Check charges
+        // Check usages (new system - consumes skill)
+        if (slotCurrentUsages.ContainsKey(slotIndex) && slotCurrentUsages[slotIndex] <= 0)
+            return false;
+        
+        // Check charges (legacy system - for backward compatibility)
         if (skillSlots[slotIndex].maxCharges > 1)
         {
             if (!slotCurrentCharges.ContainsKey(slotIndex))
@@ -112,6 +124,9 @@ public class PlayerSkillSlots : MonoBehaviour
     private Dictionary<int, float> slotCooldownTimers = new Dictionary<int, float>();
     private Dictionary<int, int> slotCurrentCharges = new Dictionary<int, int>();
     private Dictionary<int, float> slotChargeRechargeTimers = new Dictionary<int, float>();
+    
+    // Usage tracking (consumes skill after maxUsages)
+    private Dictionary<int, int> slotCurrentUsages = new Dictionary<int, int>();
 
     [Header("Skill Slot UI")]
     public Image[] skillSlotBgImages = new Image[3]; // assign in inspector
@@ -129,7 +144,12 @@ public class PlayerSkillSlots : MonoBehaviour
             if (skillSlots[i] == null || skillSlots[i].powerName == null || skillSlots[i].powerName == "")
             {
                 skillSlots[i] = powerData;
-                Debug.Log($"[PlayerSkillSlots] Assigned {powerData.powerName} to slot {i + 1}");
+                
+                // Initialize usage count
+                int maxUsages = GetMaxUsagesForPower(powerData);
+                slotCurrentUsages[i] = maxUsages;
+                
+                Debug.Log($"[PlayerSkillSlots] Assigned {powerData.powerName} to slot {i + 1} with {maxUsages} usage(s)");
                 UpdateSkillSlotUI(i);
                 for (int j = 0; j < skillSlots.Length; j++)
                 {
@@ -139,6 +159,53 @@ public class PlayerSkillSlots : MonoBehaviour
             }
         }
         Debug.LogWarning("[PlayerSkillSlots] No empty skill slots available!");
+    }
+    
+    private int GetMaxUsagesForPower(PowerStealData power)
+    {
+        if (power == null) return 0;
+
+        // For key power-steal enemies, each stolen skill is a single-use ability.
+        // These names should match PowerStealData.enemyName / EnemyData.enemyName.
+        if (!string.IsNullOrEmpty(power.enemyName))
+        {
+            string id = power.enemyName;
+            if (id == "Tiyanak" ||
+                id == "Aswang" ||
+                id == "Tikbalang" ||
+                id == "Manananggal" ||
+                id == "Berberoka" ||
+                id == "Bungisngis")
+            {
+                return 1;
+            }
+        }
+        
+        // If maxUsages is explicitly set and > 0, use it
+        if (power.maxUsages > 0)
+            return power.maxUsages;
+        
+        // If autoSetUsagesByType is enabled, set based on power type
+        if (power.autoSetUsagesByType)
+        {
+            // High benefit skills (Ultimate) = 1 usage
+            if (power.powerType == PowerStealData.PowerType.Ultimate)
+                return 1;
+            
+            // Very powerful buffs/heals = 1 usage
+            if (power.powerType == PowerStealData.PowerType.Buff && 
+                (power.damageBonus >= 15 || power.speedBonus >= 3f || power.healthBonus >= 50))
+                return 1;
+            
+            if (power.powerType == PowerStealData.PowerType.Heal && power.healAmount >= 50)
+                return 1;
+            
+            // Normal skills = 2-3 usages (randomize for variety, or use 2 as default)
+            return 2;
+        }
+        
+        // Default: unlimited (0) or fallback to maxCharges for backward compatibility
+        return power.maxCharges > 0 ? power.maxCharges : 0;
     }
 
     // Use a skill from a slot (call from UI button)
@@ -161,11 +228,33 @@ public class PlayerSkillSlots : MonoBehaviour
         if (!IsSkillReady(slotIndex))
         {
             float cdRemaining = GetCooldownRemaining(slotIndex);
+            int usagesRemaining = slotCurrentUsages.ContainsKey(slotIndex) ? slotCurrentUsages[slotIndex] : 0;
+            
+            if (usagesRemaining <= 0)
+            {
+                Debug.Log($"[PlayerSkillSlots] {power.powerName} has no usages remaining!");
+                return;
+            }
+            
             Debug.Log($"[PlayerSkillSlots] {power.powerName} on cooldown: {cdRemaining:F1}s remaining");
             return;
         }
         
-        // Consume charge if multi-charge power
+        // Consume usage (new system)
+        if (slotCurrentUsages.ContainsKey(slotIndex))
+        {
+            slotCurrentUsages[slotIndex]--;
+            int remaining = slotCurrentUsages[slotIndex];
+            Debug.Log($"[PlayerSkillSlots] {power.powerName} used. Remaining usages: {remaining}");
+            
+            // If no usages left, mark for removal after execution
+            if (remaining <= 0)
+            {
+                Debug.Log($"[PlayerSkillSlots] {power.powerName} has been consumed! Will be removed after use.");
+            }
+        }
+        
+        // Consume charge if multi-charge power (legacy system - backward compatibility)
         if (power.maxCharges > 1)
         {
             if (!slotCurrentCharges.ContainsKey(slotIndex))
@@ -217,11 +306,37 @@ public class PlayerSkillSlots : MonoBehaviour
         StartCoroutine(ExecutePower(power, slotIndex, stats, controller));
     }
 
-    // Clear a slot (e.g., when power expires)
+    // Clear a slot (e.g., when power expires or is consumed)
     public void ClearSkillSlot(int slotIndex)
     {
         skillSlots[slotIndex] = null;
+        
+        // Clear usage tracking
+        if (slotCurrentUsages.ContainsKey(slotIndex))
+            slotCurrentUsages.Remove(slotIndex);
+        
+        // Clear charge tracking
+        if (slotCurrentCharges.ContainsKey(slotIndex))
+            slotCurrentCharges.Remove(slotIndex);
+        
+        // Clear cooldown
+        if (slotCooldownTimers.ContainsKey(slotIndex))
+            slotCooldownTimers.Remove(slotIndex);
+        
         UpdateSkillSlotUI(slotIndex);
+    }
+    
+    public int GetRemainingUsages(int slotIndex)
+    {
+        if (!slotCurrentUsages.ContainsKey(slotIndex))
+            return 0;
+        return slotCurrentUsages[slotIndex];
+    }
+    
+    public int GetMaxUsages(int slotIndex)
+    {
+        if (skillSlots[slotIndex] == null) return 0;
+        return GetMaxUsagesForPower(skillSlots[slotIndex]);
     }
 
     // Update UI icon for a slot
@@ -273,6 +388,16 @@ public class PlayerSkillSlots : MonoBehaviour
         {
             Debug.LogWarning($"[PlayerSkillSlots] skillSlotSkillImages array not assigned or index out of range: {slotIndex}");
         }
+        
+        // Update usage UI if available
+        UpdateUsageUI(slotIndex);
+    }
+    
+    private void UpdateUsageUI(int slotIndex)
+    {
+        // Find SkillUsageUI components in the skill slot UI hierarchy
+        // This will be called by the SkillUsageUI component itself via Update()
+        // But we can trigger updates here if needed
     }
 
 
@@ -326,8 +451,12 @@ public class PlayerSkillSlots : MonoBehaviour
             Debug.Log("[PlayerSkillSlots] Player movement restored after skill activation.");
         }
         
-        // Note: Powers are NOT cleared after use - they persist with cooldowns
-        // Only clear if explicitly marked as one-time use
+        // Check if skill should be consumed (no usages remaining)
+        if (slotCurrentUsages.ContainsKey(slotIndex) && slotCurrentUsages[slotIndex] <= 0)
+        {
+            Debug.Log($"[PlayerSkillSlots] {power.powerName} consumed! Removing from slot {slotIndex + 1}.");
+            ClearSkillSlot(slotIndex);
+        }
     }
     
     private void ExecuteAttackPower(PowerStealData power, PlayerStats stats)
@@ -405,12 +534,23 @@ public class PlayerSkillSlots : MonoBehaviour
     {
         if (power.dashDistance > 0f || power.dashSpeed > 0f)
         {
-            // Dash
-            if (controller != null)
+            // Dash / leap-style movement
+            // Prefer an explicit controller if provided, otherwise try to find one on the player.
+            var moveController = controller != null ? controller : GetComponent<ThirdPersonController>();
+
+            Vector3 dashDir = transform.forward;
+            float dashDist = power.dashDistance > 0f ? power.dashDistance : 5f;
+            float dashSpeedMult = power.dashSpeed > 0f ? power.dashSpeed : 1.0f;
+
+            // If this mobility power also has attack values, perform a leap
+            // and then apply its damage/area effect once the leap finishes.
+            if (power.attackRadius > 0f || power.attackDamage > 0)
             {
-                Vector3 dashDir = transform.forward;
-                float dashDist = power.dashDistance > 0f ? power.dashDistance : 5f;
-                StartCoroutine(DashMovement(controller, dashDir, dashDist, power.dashSpeed));
+                StartCoroutine(DashAndStrike(power, stats, moveController, dashDir, dashDist, dashSpeedMult));
+            }
+            else
+            {
+                StartCoroutine(DashMovement(moveController, dashDir, dashDist, dashSpeedMult));
             }
         }
         else if (power.glideDuration > 0f)
@@ -422,8 +562,13 @@ public class PlayerSkillSlots : MonoBehaviour
     
     private IEnumerator DashMovement(ThirdPersonController controller, Vector3 direction, float distance, float speedMult)
     {
+        // Temporarily disable normal movement so the leap is clean.
+        bool hadController = controller != null;
+        if (hadController)
+            controller.enabled = false;
+
         float elapsed = 0f;
-        float dashTime = 0.3f; // Quick dash
+        float dashTime = 0.3f / Mathf.Max(0.1f, speedMult); // Faster speedMult = quicker dash
         Vector3 startPos = transform.position;
         Vector3 targetPos = startPos + direction.normalized * distance;
         
@@ -434,6 +579,18 @@ public class PlayerSkillSlots : MonoBehaviour
             transform.position = Vector3.Lerp(startPos, targetPos, t);
             yield return null;
         }
+
+        if (hadController && controller != null)
+            controller.enabled = true;
+    }
+
+    private IEnumerator DashAndStrike(PowerStealData power, PlayerStats stats, ThirdPersonController controller, Vector3 direction, float distance, float speedMult)
+    {
+        // perform the leap first
+        yield return DashMovement(controller, direction, distance, speedMult);
+
+        // then apply the attack effect if any
+        ExecuteAttackPower(power, stats);
     }
     
     private IEnumerator ApplyGlide(PowerStealData power, PlayerStats stats, ThirdPersonController controller)
@@ -472,13 +629,26 @@ public class PlayerSkillSlots : MonoBehaviour
     
     private void ExecuteControlPower(PowerStealData power, PlayerStats stats)
     {
-        if (power.attackRadius > 0f)
+        if (power.attackRadius <= 0f) return;
+
+        Vector3 center = transform.position;
+        Collider[] hits = Physics.OverlapSphere(center, power.attackRadius, LayerMask.GetMask("Enemy"));
+        var seen = new HashSet<GameObject>();
+        foreach (var c in hits)
         {
-            Vector3 center = transform.position;
-            Collider[] hits = Physics.OverlapSphere(center, power.attackRadius, LayerMask.GetMask("Enemy"));
-            // TODO: Apply slow/root/fear to enemies
-            Debug.Log($"[PlayerSkillSlots] {power.powerName} control effect on {hits.Length} enemies");
+            var dmg = c.GetComponentInParent<IEnemyDamageable>();
+            if (dmg != null)
+            {
+                var mb = dmg as MonoBehaviour;
+                if (mb != null) seen.Add(mb.gameObject);
+            }
         }
+        foreach (var go in seen)
+        {
+            int dmgAmount = power.attackDamage > 0 ? power.attackDamage : 10;
+            EnemyDamageRelay.Apply(go, dmgAmount, gameObject);
+        }
+        Debug.Log($"[PlayerSkillSlots] {power.powerName} control effect hit {seen.Count} enemies");
     }
     
     private void ExecuteHealPower(PowerStealData power, PlayerStats stats)
@@ -564,7 +734,7 @@ public class PlayerSkillSlots : MonoBehaviour
     {
         AssignPowerToSlot(powerData);
         
-        // Initialize charges for multi-charge powers
+        // Initialize charges for multi-charge powers (legacy - backward compatibility)
         for (int i = 0; i < skillSlots.Length; i++)
         {
             if (skillSlots[i] == powerData && powerData.maxCharges > 1)
@@ -572,5 +742,7 @@ public class PlayerSkillSlots : MonoBehaviour
                 slotCurrentCharges[i] = powerData.maxCharges;
             }
         }
+        
+        // Usages are already initialized in AssignPowerToSlot
     }
 }

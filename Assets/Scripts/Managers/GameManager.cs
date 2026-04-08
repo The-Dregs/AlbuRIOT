@@ -20,6 +20,10 @@ public class GameManager : MonoBehaviourPun
     [Header("Player Management")]
     public GameObject localPlayer;
     public List<GameObject> allPlayers = new List<GameObject>();
+
+    [Header("Debug")]
+    [SerializeField] private bool enableDebugLogging = false;
+    [SerializeField] private bool enableDebugHotkeys = false;
     
     [Header("Game Events")]
     public System.Action<GameState> OnGameStateChanged;
@@ -86,6 +90,39 @@ public class GameManager : MonoBehaviourPun
         InitializeGame();
     }
     
+    void OnDestroy()
+    {
+        if (Instance == this)
+        {
+            Instance = null;
+        }
+        
+        // Unsubscribe from network events
+        if (networkManager != null)
+        {
+            networkManager.OnGameStarted -= OnGameStarted;
+            networkManager.OnGamePaused -= OnGamePaused;
+            networkManager.OnGameResumed -= OnGameResumed;
+            networkManager.OnPlayerJoined -= OnPlayerJoined;
+            networkManager.OnPlayerLeft -= OnPlayerLeft;
+        }
+        
+        // Unsubscribe from quest events
+        if (questManager != null)
+        {
+            questManager.OnQuestCompleted -= OnQuestCompleted;
+            questManager.OnObjectiveCompleted -= OnObjectiveCompleted;
+        }
+
+        StopAllCoroutines();
+        OnGameStateChanged = null;
+        OnGameTimeUpdated = null;
+        OnScoreUpdated = null;
+        OnGameWon = null;
+        OnGameLost = null;
+        allPlayers?.Clear();
+    }
+    
     void Update()
     {
         if (isGameActive && currentGameState == GameState.Playing)
@@ -131,19 +168,8 @@ public class GameManager : MonoBehaviourPun
     
     private void HandleInput()
     {
-        // Handle game state transitions
-        if (Input.GetKeyDown(KeyCode.Escape))
-        {
-            if (currentGameState == GameState.Playing)
-            {
-                SetGameState(GameState.Paused);
-            }
-            else if (currentGameState == GameState.Paused)
-            {
-                SetGameState(GameState.Playing);
-            }
-        }
-        
+        if (!enableDebugHotkeys) return;
+
         // Handle debug commands
         if (Input.GetKeyDown(KeyCode.F1))
         {
@@ -168,7 +194,7 @@ public class GameManager : MonoBehaviourPun
         previousGameState = currentGameState;
         currentGameState = newState;
         
-        Debug.Log($"Game state changed from {previousGameState} to {currentGameState}");
+        if (enableDebugLogging) Debug.Log($"Game state changed from {previousGameState} to {currentGameState}");
         
         // Handle state transitions
         HandleGameStateTransition(previousGameState, currentGameState);
@@ -289,7 +315,7 @@ public class GameManager : MonoBehaviourPun
     
     private void OnPlayerJoined(Photon.Realtime.Player player)
     {
-        Debug.Log($"Player {player.NickName} joined the game");
+        if (enableDebugLogging) Debug.Log($"Player {player.NickName} joined the game");
         
         // Sync game state (buffered so new player gets state automatically)
         if (networkManager != null && networkManager.IsMasterClient())
@@ -300,7 +326,7 @@ public class GameManager : MonoBehaviourPun
     
     private void OnPlayerLeft(Photon.Realtime.Player player)
     {
-        Debug.Log($"Player {player.NickName} left the game");
+        if (enableDebugLogging) Debug.Log($"Player {player.NickName} left the game");
     }
     
     [PunRPC]
@@ -313,7 +339,7 @@ public class GameManager : MonoBehaviourPun
     
     private void OnQuestCompleted(Quest quest)
     {
-        Debug.Log($"Quest completed: {quest.questName}");
+        if (enableDebugLogging) Debug.Log($"Quest completed: {quest.questName}");
         
         // Add score for quest completion
         AddScore(100);
@@ -324,7 +350,7 @@ public class GameManager : MonoBehaviourPun
     
     private void OnObjectiveCompleted(QuestObjective objective)
     {
-        Debug.Log($"Objective completed: {objective.objectiveName}");
+        if (enableDebugLogging) Debug.Log($"Objective completed: {objective.objectiveName}");
         
         // Add score for objective completion
         AddScore(25);
@@ -355,6 +381,7 @@ public class GameManager : MonoBehaviourPun
     // Debug methods
     private void DebugGameState()
     {
+        if (!enableDebugLogging) return;
         Debug.Log($"=== Game State Debug ===");
         Debug.Log($"Current State: {currentGameState}");
         Debug.Log($"Game Time: {gameTime:F2}s");

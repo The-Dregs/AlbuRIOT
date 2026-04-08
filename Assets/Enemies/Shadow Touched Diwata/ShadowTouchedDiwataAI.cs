@@ -68,7 +68,6 @@ public class ShadowTouchedDiwataAI : BaseEnemyAI
     private float lastLamentTime = -9999f;
     private float lastAnySkillRecoveryEnd = -9999f;
     private float lastAnySkillRecoveryStart = -9999f;
-    private AudioSource audioSource;
     private Coroutine activeAbility;
     private Coroutine basicRoutine;
     private bool eclipseVeilActive = false; // Allow movement while active but block other specials
@@ -77,11 +76,7 @@ public class ShadowTouchedDiwataAI : BaseEnemyAI
     public float EclipseVeilCooldownRemaining => Mathf.Max(0f, eclipseVeilCooldown - (Time.time - lastEclipseVeilTime));
     public float LamentCooldownRemaining => Mathf.Max(0f, lamentCooldown - (Time.time - lastLamentTime));
 
-    protected override void InitializeEnemy()
-    {
-        audioSource = GetComponent<AudioSource>();
-        if (audioSource == null) audioSource = gameObject.AddComponent<AudioSource>();
-    }
+    protected override void InitializeEnemy() { }
 
     protected override void BuildBehaviorTree()
     {
@@ -89,7 +84,7 @@ public class ShadowTouchedDiwataAI : BaseEnemyAI
         var hasTarget = new ConditionNode(blackboard, HasTarget, "has_target");
         var targetInDetection = new ConditionNode(blackboard, TargetInDetectionRange, "in_detect_range");
         var moveToTarget = new ActionNode(blackboard, MoveTowardsTarget, "move_to_target");
-        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRange, "in_attack_range");
+        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRangeAndFacing, "in_attack_range_facing");
         var basicAttack = new ActionNode(blackboard, () => { PerformBasicAttack(); return NodeState.Success; }, "basic");
         var canEclipseVeil = new ConditionNode(blackboard, CanEclipseVeil, "can_eclipseveil");
         var doEclipseVeil = new ActionNode(blackboard, () => { StartEclipseVeil(); return NodeState.Success; }, "eclipseveil");
@@ -131,21 +126,24 @@ public class ShadowTouchedDiwataAI : BaseEnemyAI
     private IEnumerator CoBasicAttack(Transform target)
     {
         BeginAction(AIState.BasicAttack);
+        Quaternion lockedRotation = transform.rotation;
 
         // Windup animation trigger
         if (animator != null)
         {
             if (HasTrigger(attackWindupTrigger))
-                animator.SetTrigger(attackWindupTrigger);
+                SetTriggerSync(attackWindupTrigger);
             else if (HasTrigger(attackTrigger))
-                animator.SetTrigger(attackTrigger);
+                SetTriggerSync(attackTrigger);
         }
+        PlayAttackWindupSfx();
 
-        // Windup phase - freeze movement during windup
+        // Windup phase - lock position and rotation
         float windup = Mathf.Max(0f, enemyData.attackWindup);
         while (windup > 0f)
         {
             windup -= Time.deltaTime;
+            transform.rotation = lockedRotation;
             if (controller != null && controller.enabled)
                 controller.SimpleMove(Vector3.zero);
             yield return null;
@@ -153,7 +151,8 @@ public class ShadowTouchedDiwataAI : BaseEnemyAI
 
         // Impact animation trigger
         if (animator != null && HasTrigger(attackImpactTrigger))
-            animator.SetTrigger(attackImpactTrigger);
+            SetTriggerSync(attackImpactTrigger);
+        PlayAttackImpactSfx();
 
         // Apply damage after windup
         float radius = Mathf.Max(0.8f, enemyData.attackRange);
@@ -162,17 +161,20 @@ public class ShadowTouchedDiwataAI : BaseEnemyAI
         foreach (var c in cols)
         {
             var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null) ps.TakeDamage(enemyData.basicDamage);
+            if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, enemyData.basicDamage);
         }
 
-        // Post-stop using attackMoveLock duration
+        // Exhausted phase - lock position, rotation, set Exhausted animator
         float post = Mathf.Max(0.1f, enemyData.attackMoveLock);
+        if (post > 0f && HasBool("Exhausted")) SetBoolSync("Exhausted", true);
         while (post > 0f)
         {
             post -= Time.deltaTime;
+            transform.rotation = lockedRotation;
             if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
             yield return null;
         }
+        if (HasBool("Exhausted")) SetBoolSync("Exhausted", false);
 
         lastAttackTime = Time.time;
         attackLockTimer = enemyData.attackMoveLock;
@@ -225,7 +227,7 @@ public class ShadowTouchedDiwataAI : BaseEnemyAI
     private IEnumerator CoEclipseVeil()
     {
         BeginAction(AIState.Special1);
-        if (animator != null && HasTrigger(eclipseVeilWindupTrigger)) animator.SetTrigger(eclipseVeilWindupTrigger);
+        if (animator != null && HasTrigger(eclipseVeilWindupTrigger)) SetTriggerSync(eclipseVeilWindupTrigger);
         if (audioSource != null && eclipseVeilWindupSFX != null)
         {
             audioSource.clip = eclipseVeilWindupSFX;
@@ -291,7 +293,7 @@ public class ShadowTouchedDiwataAI : BaseEnemyAI
         if (windupFx != null) Destroy(windupFx);
         // Replace windup indicator with active one
         if (indicatorWindup != null) Destroy(indicatorWindup);
-        if (audioSource != null && eclipseVeilActiveSFX != null) audioSource.PlayOneShot(eclipseVeilActiveSFX);
+        PlaySfx(eclipseVeilActiveSFX);
         GameObject activeFx = null;
         GameObject indicatorFx = null;
         if (eclipseVeilActiveVFX != null)
@@ -314,7 +316,7 @@ public class ShadowTouchedDiwataAI : BaseEnemyAI
         // Allow movement while veil is active
         eclipseVeilActive = true;
         EndAction();
-        if (animator != null && HasTrigger(eclipseVeilMainTrigger)) animator.SetTrigger(eclipseVeilMainTrigger);
+        if (animator != null && HasTrigger(eclipseVeilMainTrigger)) SetTriggerSync(eclipseVeilMainTrigger);
         
         int ticks = Mathf.Max(1, eclipseVeilTicks);
         float interval = Mathf.Max(0.05f, eclipseVeilTickInterval);
@@ -324,7 +326,7 @@ public class ShadowTouchedDiwataAI : BaseEnemyAI
             foreach (var c in cols)
             {
                 var ps = c.GetComponentInParent<PlayerStats>();
-                if (ps != null) ps.TakeDamage(eclipseVeilTickDamage);
+        if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, eclipseVeilTickDamage);
                 // Pull towards center
                 var rb = c.attachedRigidbody;
                 if (rb != null)
@@ -343,7 +345,7 @@ public class ShadowTouchedDiwataAI : BaseEnemyAI
         
         if (eclipseVeilStoppageTime > 0f)
         {
-            if (animator != null && HasTrigger(skillStoppageTrigger)) animator.SetTrigger(skillStoppageTrigger);
+            if (animator != null && HasTrigger(skillStoppageTrigger)) SetTriggerSync(skillStoppageTrigger);
             
             float stopTimer = eclipseVeilStoppageTime;
             float quarterStoppage = eclipseVeilStoppageTime * 0.75f;
@@ -357,14 +359,14 @@ public class ShadowTouchedDiwataAI : BaseEnemyAI
                 // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
                 if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
                 {
-                    animator.SetBool("Exhausted", true);
+                    SetBoolSync("Exhausted", true);
                 }
                 
                 yield return null;
             }
             
             // Clear Exhausted boolean parameter
-            if (animator != null) animator.SetBool("Exhausted", false);
+            if (animator != null) SetBoolSync("Exhausted", false);
         }
         
         // Recovery time (AI can move but skill still on cooldown, gradual speed recovery)
@@ -432,9 +434,8 @@ public class ShadowTouchedDiwataAI : BaseEnemyAI
 
         // Windup phase - separate trigger, VFX, and SFX
         if (animator != null && HasTrigger(lamentWindupTrigger))
-            animator.SetTrigger(lamentWindupTrigger);
-        if (audioSource != null && lamentWindupSFX != null)
-            audioSource.PlayOneShot(lamentWindupSFX);
+            SetTriggerSync(lamentWindupTrigger);
+        PlaySfx(lamentWindupSFX);
         GameObject wind = null;
         if (lamentWindupVFX != null)
         {
@@ -459,7 +460,7 @@ public class ShadowTouchedDiwataAI : BaseEnemyAI
 
         // Impact/Main phase - separate trigger, VFX, and SFX
         if (animator != null && HasTrigger(lamentMainTrigger))
-            animator.SetTrigger(lamentMainTrigger);
+            SetTriggerSync(lamentMainTrigger);
 
         if (lamentImpactVFX != null)
         {
@@ -468,8 +469,7 @@ public class ShadowTouchedDiwataAI : BaseEnemyAI
             if (lamentImpactVFXScale > 0f)
                 fx.transform.localScale = Vector3.one * lamentImpactVFXScale;
         }
-        if (audioSource != null && lamentImpactSFX != null)
-            audioSource.PlayOneShot(lamentImpactSFX);
+        PlaySfx(lamentImpactSFX);
 
         // Forward melee slash damage (strip/rectangle area in front)
         Vector3 fwd = new Vector3(transform.forward.x, 0f, transform.forward.z).normalized;
@@ -485,14 +485,14 @@ public class ShadowTouchedDiwataAI : BaseEnemyAI
             if (along >= 0f && along <= lamentRange && Mathf.Abs(across) <= (lamentWidth * 0.5f))
             {
                 var ps = c.GetComponentInParent<PlayerStats>();
-                if (ps != null) ps.TakeDamage(lamentDamage);
+        if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, lamentDamage);
             }
         }
 
         // Stoppage recovery (AI frozen after attack)
         if (lamentStoppageTime > 0f)
         {
-            if (animator != null && HasTrigger(skillStoppageTrigger)) animator.SetTrigger(skillStoppageTrigger);
+            if (animator != null && HasTrigger(skillStoppageTrigger)) SetTriggerSync(skillStoppageTrigger);
 
             float stopTimer = lamentStoppageTime;
             float quarterStoppage = lamentStoppageTime * 0.75f;
@@ -506,14 +506,14 @@ public class ShadowTouchedDiwataAI : BaseEnemyAI
                 // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
                 if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
                 {
-                    animator.SetBool("Exhausted", true);
+                    SetBoolSync("Exhausted", true);
                 }
 
                 yield return null;
             }
 
             // Clear Exhausted boolean parameter
-            if (animator != null) animator.SetBool("Exhausted", false);
+            if (animator != null) SetBoolSync("Exhausted", false);
         }
 
         // End busy state so AI can move during recovery

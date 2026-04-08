@@ -5,6 +5,8 @@ using System.Collections.Generic;
 
 public class TutorialManager : MonoBehaviourPunCallbacks
 {
+    public static bool IsDialogueBlockingUI { get; private set; }
+
     [Header("Tutorial Data")]
     [Tooltip("Tutorial data definitions - each entry defines a complete tutorial step")]
     public TutorialData[] tutorialSteps;
@@ -27,6 +29,11 @@ public class TutorialManager : MonoBehaviourPunCallbacks
     private Dictionary<int, Coroutine> activeContinueCoroutines = new Dictionary<int, Coroutine>();
     private Dictionary<int, bool> waitingForContinue = new Dictionary<int, bool>();
     private Dictionary<int, GameObject> activeDialoguePanels = new Dictionary<int, GameObject>(); // Track panel GameObjects per player
+    private Dictionary<int, GameObject> activeContinuePrompts = new Dictionary<int, GameObject>(); // Track continue prompts per player
+    private Dictionary<int, int> activeInputLockTokens = new Dictionary<int, int>(); // playerID -> LocalInputLocker token
+    private Dictionary<int, PlayerCombat> activePlayerCombat = new Dictionary<int, PlayerCombat>();
+    private Dictionary<int, bool> activePlayerCombatWasEnabled = new Dictionary<int, bool>();
+    private readonly List<int> reusableKeysToClose = new List<int>(8);
 
     private void Start()
     {
@@ -63,8 +70,8 @@ public class TutorialManager : MonoBehaviourPunCallbacks
 
         // Use TutorialData if available, fall back to legacy
         TutorialData tutorialData = null;
-        GameObject dialoguePanel = null;
-        GameObject continuePrompt = null;
+        GameObject dialoguePanelPrefab = null;
+        GameObject continuePromptPrefab = null;
         float delay = continueDelay;
 
         if (tutorialSteps != null && tutorialIndex >= 0 && tutorialIndex < tutorialSteps.Length)
@@ -72,23 +79,31 @@ public class TutorialManager : MonoBehaviourPunCallbacks
             tutorialData = tutorialSteps[tutorialIndex];
             if (tutorialData != null)
             {
-                dialoguePanel = tutorialData.dialoguePanel;
-                continuePrompt = tutorialData.continuePrompt;
+                dialoguePanelPrefab = tutorialData.dialoguePanel;
+                continuePromptPrefab = tutorialData.continuePrompt;
                 delay = tutorialData.continueDelay;
             }
         }
         else if (dialoguePanels != null && tutorialIndex >= 0 && tutorialIndex < dialoguePanels.Length)
         {
             // Legacy support
-            dialoguePanel = dialoguePanels[tutorialIndex];
-            continuePrompt = (continuePrompts != null && tutorialIndex < continuePrompts.Length) 
+            dialoguePanelPrefab = dialoguePanels[tutorialIndex];
+            continuePromptPrefab = (continuePrompts != null && tutorialIndex < continuePrompts.Length) 
                 ? continuePrompts[tutorialIndex] : null;
         }
 
-        if (dialoguePanel == null) return;
+        if (dialoguePanelPrefab == null) return;
 
         // Hide any existing dialogue for this player
         HideTutorialForPlayer(player);
+
+        // Instantiate panel per-player (ensures per-player UI in multiplayer)
+        GameObject dialoguePanel = InstantiatePanelForPlayer(playerID, dialoguePanelPrefab);
+        GameObject continuePrompt = continuePromptPrefab != null 
+            ? InstantiatePanelForPlayer(playerID, continuePromptPrefab, dialoguePanel) 
+            : null;
+
+        if (dialoguePanel == null) return;
 
         // Show dialogue panel
         dialoguePanel.SetActive(true);
@@ -97,7 +112,23 @@ public class TutorialManager : MonoBehaviourPunCallbacks
         // Track active tutorial
         activePlayerTutorials[playerID] = tutorialData;
         activeDialoguePanels[playerID] = dialoguePanel;
+        if (continuePrompt != null) activeContinuePrompts[playerID] = continuePrompt;
         waitingForContinue[playerID] = false;
+        IsDialogueBlockingUI = activeDialoguePanels.Count > 0;
+
+        // Lock player input and unlock cursor (movement, combat, camera locked; cursor free for UI)
+        int lockToken = LocalInputLocker.Ensure().Acquire("Tutorial", lockMovement: true, lockCombat: true, lockCamera: true, cursorUnlock: true);
+        activeInputLockTokens[playerID] = lockToken;
+
+        // hard-disable combat while tutorial dialogue is open so left-click cannot attack while closing dialogue
+        var combat = player.GetComponentInChildren<PlayerCombat>(true) ?? player.GetComponentInParent<PlayerCombat>();
+        if (combat != null)
+        {
+            activePlayerCombat[playerID] = combat;
+            activePlayerCombatWasEnabled[playerID] = combat.enabled;
+            combat.SetCanControl(false);
+            combat.enabled = false;
+        }
 
         // Start continue prompt coroutine
         if (activeContinueCoroutines.ContainsKey(playerID) && activeContinueCoroutines[playerID] != null)
@@ -106,52 +137,14 @@ public class TutorialManager : MonoBehaviourPunCallbacks
         }
         activeContinueCoroutines[playerID] = StartCoroutine(ShowContinuePromptAfterDelay(playerID, continuePrompt, delay));
 
-        // Apply UI actions
-        if (tutorialData != null)
+        // Update dialogue text if provided
+        if (tutorialData != null && !string.IsNullOrEmpty(tutorialData.dialogueText))
         {
-            ApplyTutorialUIActions(player, tutorialData);
-        }
-        else
-        {
-            // Legacy UI actions
-            ApplyLegacyUIActions(tutorialIndex);
+            UpdateDialogueText(dialoguePanel, tutorialData.dialogueText);
         }
     }
 
-    private void ApplyTutorialUIActions(GameObject player, TutorialData data)
-    {
-        var uiController = player.GetComponent<PlayerUIController>();
-        
-        if (data.enableHealthBar && uiController != null && uiController.healthBarRoot != null)
-        {
-            uiController.healthBarRoot.SetActive(true);
-        }
-
-        if (data.enableSkillUI && uiController != null && uiController.skillUIRoot != null)
-        {
-            uiController.skillUIRoot.SetActive(true);
-        }
-
-        if (data.showQuestUI)
-        {
-            GameObject targetQuestUI = data.questUI != null ? data.questUI : questUI;
-            if (targetQuestUI != null) targetQuestUI.SetActive(true);
-        }
-    }
-
-    private void ApplyLegacyUIActions(int triggerIndex)
-    {
-        // Legacy health bar logic (enable for all players - but should be per-player)
-        var players = GameObject.FindGameObjectsWithTag(playerTag);
-        foreach (var p in players)
-        {
-            var ui = p.GetComponent<PlayerUIController>();
-            if (ui != null && ui.healthBarRoot != null) ui.healthBarRoot.SetActive(true);
-        }
-
-        // Legacy quest UI (global)
-        if (questUI != null) questUI.SetActive(true);
-    }
+    
 
     private System.Collections.IEnumerator ShowContinuePromptAfterDelay(int playerID, GameObject prompt, float delay)
     {
@@ -183,8 +176,11 @@ public class TutorialManager : MonoBehaviourPunCallbacks
 
     private void Update()
     {
+        if (waitingForContinue.Count == 0) return;
+        if (!Input.GetMouseButtonDown(0)) return;
+
         // Check for continue input for each active player (only local player can continue)
-        var keysToClose = new List<int>();
+        reusableKeysToClose.Clear();
         
         // First pass: collect keys to close without modifying the dictionary
         foreach (var kvp in waitingForContinue)
@@ -206,49 +202,123 @@ public class TutorialManager : MonoBehaviourPunCallbacks
                     panel = dialoguePanels[playerID];
                 }
 
-                if (panel != null && panel.activeSelf && Input.GetMouseButtonDown(0))
+                if (panel != null && panel.activeSelf)
                 {
-                    keysToClose.Add(playerID);
+                    reusableKeysToClose.Add(playerID);
                 }
             }
         }
 
         // Second pass: close dialogues for collected keys (modifies dictionary)
-        foreach (var key in keysToClose)
+        for (int i = 0; i < reusableKeysToClose.Count; i++)
         {
-            CloseDialogueForPlayer(key);
+            CloseDialogueForPlayer(reusableKeysToClose[i]);
+        }
+    }
+
+    private GameObject InstantiatePanelForPlayer(int playerID, GameObject panelPrefab, GameObject parentCanvas = null)
+    {
+        if (panelPrefab == null) return null;
+
+        // If panel is already instantiated for this player, reuse it
+        if (activeDialoguePanels.ContainsKey(playerID) && activeDialoguePanels[playerID] != null)
+        {
+            var existing = activeDialoguePanels[playerID];
+            if (existing.name.Contains(panelPrefab.name) || existing.name == panelPrefab.name)
+            {
+                return existing;
+            }
+        }
+
+        // Check if it's a prefab (has PrefabAsset or is in Resources)
+        bool isPrefab = !panelPrefab.scene.IsValid();
+        
+        if (isPrefab)
+        {
+            // Instantiate prefab
+            GameObject instance = Instantiate(panelPrefab);
+            instance.name = $"{panelPrefab.name}_Player{playerID}";
+            
+            // Parent to player's UI canvas if available, otherwise scene root
+            if (parentCanvas != null)
+            {
+                instance.transform.SetParent(parentCanvas.transform, false);
+            }
+            
+            return instance;
+        }
+        else
+        {
+            // Scene reference - use directly (for backwards compatibility)
+            // In multiplayer, this should only be visible to local player due to IsMine check
+            return panelPrefab;
+        }
+    }
+
+    private void UpdateDialogueText(GameObject panel, string text)
+    {
+        if (panel == null || string.IsNullOrEmpty(text)) return;
+
+        // Try to find TextMeshPro component in panel or children
+        var tmpText = panel.GetComponentInChildren<TMPro.TextMeshProUGUI>();
+        if (tmpText != null)
+        {
+            tmpText.text = text;
         }
     }
 
     private void CloseDialogueForPlayer(int playerID)
     {
-        // Hide tutorial data panel
-        if (activePlayerTutorials.ContainsKey(playerID))
-        {
-            var data = activePlayerTutorials[playerID];
-            if (data != null)
-            {
-                if (data.dialoguePanel != null) data.dialoguePanel.SetActive(false);
-                if (data.continuePrompt != null) data.continuePrompt.SetActive(false);
-            }
-            activePlayerTutorials.Remove(playerID);
-        }
-
-        // Hide tracked panel
+        // Hide and destroy instantiated panels
         if (activeDialoguePanels.ContainsKey(playerID))
         {
             var panel = activeDialoguePanels[playerID];
-            if (panel != null) panel.SetActive(false);
+            if (panel != null)
+            {
+                // Only destroy if it's an instantiated prefab (not a scene reference)
+                bool isInstantiated = panel.name.Contains("_Player") || !panel.scene.IsValid();
+                if (isInstantiated && Application.isPlaying)
+                {
+                    Destroy(panel);
+                }
+                else
+                {
+                    panel.SetActive(false);
+                }
+            }
             activeDialoguePanels.Remove(playerID);
         }
 
-        // Legacy support
-        if (dialoguePanels != null && playerID >= 0 && playerID < dialoguePanels.Length)
+        IsDialogueBlockingUI = activeDialoguePanels.Count > 0;
+
+        if (activeContinuePrompts.ContainsKey(playerID))
+        {
+            var prompt = activeContinuePrompts[playerID];
+            if (prompt != null)
+            {
+                bool isInstantiated = prompt.name.Contains("_Player") || !prompt.scene.IsValid();
+                if (isInstantiated && Application.isPlaying)
+                {
+                    Destroy(prompt);
+                }
+                else
+                {
+                    prompt.SetActive(false);
+                }
+            }
+            activeContinuePrompts.Remove(playerID);
+        }
+
+        // Clean up tutorial data reference
+        activePlayerTutorials.Remove(playerID);
+
+        // Legacy support (only if not using instantiated panels)
+        if (!activeDialoguePanels.ContainsKey(playerID) && dialoguePanels != null && playerID >= 0 && playerID < dialoguePanels.Length)
         {
             var panel = dialoguePanels[playerID];
             if (panel != null) panel.SetActive(false);
         }
-        if (continuePrompts != null && playerID >= 0 && playerID < continuePrompts.Length)
+        if (!activeContinuePrompts.ContainsKey(playerID) && continuePrompts != null && playerID >= 0 && playerID < continuePrompts.Length)
         {
             var prompt = continuePrompts[playerID];
             if (prompt != null) prompt.SetActive(false);
@@ -262,6 +332,26 @@ public class TutorialManager : MonoBehaviourPunCallbacks
         }
 
         waitingForContinue.Remove(playerID);
+
+        // Release input lock and restore gameplay cursor
+        if (activeInputLockTokens.TryGetValue(playerID, out int token))
+        {
+            LocalInputLocker.Ensure().Release(token);
+            activeInputLockTokens.Remove(playerID);
+            LocalInputLocker.Ensure().ForceGameplayCursor();
+        }
+
+        if (activePlayerCombat.TryGetValue(playerID, out PlayerCombat combat))
+        {
+            bool wasEnabled = activePlayerCombatWasEnabled.TryGetValue(playerID, out bool enabledBefore) ? enabledBefore : true;
+            if (combat != null)
+            {
+                combat.enabled = wasEnabled;
+                combat.SetCanControl(true);
+            }
+            activePlayerCombat.Remove(playerID);
+            activePlayerCombatWasEnabled.Remove(playerID);
+        }
     }
 
     // Legacy method for backwards compatibility
@@ -285,17 +375,70 @@ public class TutorialManager : MonoBehaviourPunCallbacks
         }
     }
 
+    private GameObject cachedLocalPlayer;
+    private float lastPlayerCacheTime = -1f;
+    private const float PLAYER_CACHE_INTERVAL = 1f;
+    
     private GameObject FindLocalPlayer()
     {
+        if (cachedLocalPlayer != null && Time.time - lastPlayerCacheTime < PLAYER_CACHE_INTERVAL)
+        {
+            if (cachedLocalPlayer != null)
+                return cachedLocalPlayer;
+        }
+        
         var players = GameObject.FindGameObjectsWithTag(playerTag);
         foreach (var player in players)
         {
+            if (player == null) continue;
             var pv = player.GetComponent<PhotonView>();
             if (pv == null || !PhotonNetwork.IsConnected || pv.IsMine)
             {
+                cachedLocalPlayer = player;
+                lastPlayerCacheTime = Time.time;
                 return player;
             }
         }
-        return players.Length > 0 ? players[0] : null;
+        cachedLocalPlayer = players.Length > 0 ? players[0] : null;
+        lastPlayerCacheTime = Time.time;
+        return cachedLocalPlayer;
+    }
+    
+    void OnDestroy()
+    {
+        cachedLocalPlayer = null;
+        foreach (var coroutine in activeContinueCoroutines.Values)
+        {
+            if (coroutine != null)
+                StopCoroutine(coroutine);
+        }
+        activeContinueCoroutines.Clear();
+        if (Application.isPlaying)
+        {
+            foreach (var token in activeInputLockTokens.Values)
+                LocalInputLocker.Instance?.Release(token);
+            LocalInputLocker.Instance?.ForceGameplayCursor();
+
+            foreach (var kvp in activePlayerCombat)
+            {
+                var id = kvp.Key;
+                var combat = kvp.Value;
+                bool wasEnabled = activePlayerCombatWasEnabled.TryGetValue(id, out bool enabledBefore) ? enabledBefore : true;
+                if (combat != null)
+                {
+                    combat.enabled = wasEnabled;
+                    combat.SetCanControl(true);
+                }
+            }
+        }
+        activeInputLockTokens.Clear();
+        activePlayerCombat.Clear();
+        activePlayerCombatWasEnabled.Clear();
+        activePlayerTutorials.Clear();
+        activeDialoguePanels.Clear();
+        activeContinuePrompts.Clear();
+        waitingForContinue.Clear();
+        reusableKeysToClose.Clear();
+        IsDialogueBlockingUI = false;
     }
 }

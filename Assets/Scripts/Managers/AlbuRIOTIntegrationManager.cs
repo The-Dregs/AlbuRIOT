@@ -53,10 +53,18 @@ public class AlbuRIOTIntegrationManager : MonoBehaviourPun
         {
             AutoFindComponents();
         }
-        
+
         InitializeSystems();
     }
-    
+
+    void OnDestroy()
+    {
+        if (Instance == this) Instance = null;
+        StopAllCoroutines();
+        OnSystemsInitialized = null;
+        OnSystemError = null;
+    }
+
     void Start()
     {
         SetupSystemConnections();
@@ -110,44 +118,44 @@ public class AlbuRIOTIntegrationManager : MonoBehaviourPun
             // Initialize DataTableManager first
             if (dataTableManager != null)
             {
-                Debug.Log("DataTableManager initialized");
+                if (enableDebugLogging) Debug.Log("DataTableManager initialized");
             }
             
             // Initialize ItemManager
             if (itemManager != null)
             {
                 itemManager.RefreshItemLookup();
-                Debug.Log("ItemManager initialized");
+                if (enableDebugLogging) Debug.Log("ItemManager initialized");
             }
             
             // Initialize QuestManager
             if (questManager != null)
             {
-                Debug.Log("QuestManager initialized");
+                if (enableDebugLogging) Debug.Log("QuestManager initialized");
             }
             
             // Initialize MovesetManager
             if (movesetManager != null)
             {
-                Debug.Log("MovesetManager initialized");
+                if (enableDebugLogging) Debug.Log("MovesetManager initialized");
             }
             
             // Initialize VFXManager
             if (vfxManager != null)
             {
-                Debug.Log("VFXManager initialized");
+                if (enableDebugLogging) Debug.Log("VFXManager initialized");
             }
             
             // Initialize PowerStealManager
             if (powerStealManager != null)
             {
-                Debug.Log("PowerStealManager initialized");
+                if (enableDebugLogging) Debug.Log("PowerStealManager initialized");
             }
             
             // Initialize DebuffManager
             if (debuffManager != null)
             {
-                Debug.Log("DebuffManager initialized");
+                if (enableDebugLogging) Debug.Log("DebuffManager initialized");
             }
             
         }
@@ -188,7 +196,10 @@ public class AlbuRIOTIntegrationManager : MonoBehaviourPun
                 if (movesetManager != null)
                     playerCombat.movesetManager = movesetManager;
                 if (vfxManager != null)
+                {
                     playerCombat.vfxManager = vfxManager;
+                    playerCombat.effectsManager = vfxManager;
+                }
                 if (powerStealManager != null)
                     playerCombat.powerStealManager = powerStealManager;
             }
@@ -205,7 +216,7 @@ public class AlbuRIOTIntegrationManager : MonoBehaviourPun
                 // debuffManager auto-finds PlayerStats and MovesetManager in Awake()
             }
             
-            Debug.Log("System connections established successfully!");
+            if (enableDebugLogging) Debug.Log("System connections established successfully!");
         }
         catch (Exception e)
         {
@@ -327,29 +338,14 @@ public class AlbuRIOTIntegrationManager : MonoBehaviourPun
     
     void Update()
     {
-        // Handle debug input
-        if (enableDebugLogging)
-        {
-            if (Input.GetKeyDown(KeyCode.F1))
-            {
-                DebugSystemStatus();
-            }
-            
-            if (Input.GetKeyDown(KeyCode.F2))
-            {
-                TestPowerSteal("Aswang");
-            }
-            
-            if (Input.GetKeyDown(KeyCode.F3))
-            {
-                TestDebuff("Slow");
-            }
-            
-            if (Input.GetKeyDown(KeyCode.F4))
-            {
-                TestVFX("Aswang", "Shadow Swarm");
-            }
-        }
+        // Debug hotkeys are editor/development-only to keep runtime overhead zero in builds.
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        if (!enableDebugLogging) return;
+        if (Input.GetKeyDown(KeyCode.F1)) DebugSystemStatus();
+        if (Input.GetKeyDown(KeyCode.F2)) TestPowerSteal("Aswang");
+        if (Input.GetKeyDown(KeyCode.F3)) TestDebuff("Slow");
+        if (Input.GetKeyDown(KeyCode.F4)) TestVFX("Aswang", "Shadow Swarm");
+#endif
     }
     
     #endregion

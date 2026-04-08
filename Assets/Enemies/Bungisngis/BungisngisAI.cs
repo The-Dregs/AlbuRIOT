@@ -56,6 +56,8 @@ public class BungisngisAI : BaseEnemyAI
 
     [Header("Laugh Projectile")]
     public GameObject laughProjectilePrefab;
+    // Photon DefaultPool loads by Resources path. Keep a configurable path to avoid name-only lookup failures.
+    public string laughProjectileResourcePath = "Enemies/Projectiles/Belly Laugh";
     public Vector3 laughProjectileSpawnOffset = new Vector3(0f,1.2f,1.8f);
     public float laughProjectileSpeed = 18f;
     public float laughProjectileLifetime = 2.5f;
@@ -66,7 +68,6 @@ public class BungisngisAI : BaseEnemyAI
     private float lastPoundTime = -9999f;
     private float lastAnySkillRecoveryEnd = -9999f; // Track when ANY skill's recovery ended
     private float lastAnySkillRecoveryStart = -9999f; // Track when recovery phase starts
-    private AudioSource audioSource;
     private Coroutine activeAbility;
     private Coroutine basicRoutine;
 
@@ -74,11 +75,7 @@ public class BungisngisAI : BaseEnemyAI
     public float LaughCooldownRemaining => Mathf.Max(0f, laughCooldown - (Time.time - lastLaughTime));
     public float PoundCooldownRemaining => Mathf.Max(0f, poundCooldown - (Time.time - lastPoundTime));
 
-    protected override void InitializeEnemy()
-    {
-        audioSource = GetComponent<AudioSource>();
-        if (audioSource == null) audioSource = gameObject.AddComponent<AudioSource>();
-    }
+    protected override void InitializeEnemy() { }
 
     protected override void BuildBehaviorTree()
     {
@@ -86,7 +83,7 @@ public class BungisngisAI : BaseEnemyAI
         var hasTarget = new ConditionNode(blackboard, HasTarget, "has_target");
         var targetInDetection = new ConditionNode(blackboard, TargetInDetectionRange, "in_detect_range");
         var moveToTarget = new ActionNode(blackboard, MoveTowardsTarget, "move_to_target");
-        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRange, "in_attack_range");
+        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRangeAndFacing, "in_attack_range_facing");
         var basicAttack = new ActionNode(blackboard, () => { PerformBasicAttack(); return NodeState.Success; }, "basic");
         var canLaugh = new ConditionNode(blackboard, CanLaugh, "can_laugh");
         var doLaugh = new ActionNode(blackboard, () => { StartLaugh(); return NodeState.Success; }, "laugh");
@@ -125,28 +122,29 @@ public class BungisngisAI : BaseEnemyAI
     private IEnumerator CoBasicAttack(Transform target)
     {
         BeginAction(AIState.BasicAttack);
+        Quaternion lockedRotation = transform.rotation;
         
-        // Windup animation trigger
-        if (animator != null)
-        {
-            if (HasTrigger(attackWindupTrigger))
-                animator.SetTrigger(attackWindupTrigger);
-            else if (HasTrigger(attackTrigger))
-                animator.SetTrigger(attackTrigger);
-        }
+        // Windup animation trigger (sync to network)
+        if (HasTrigger(attackWindupTrigger))
+            SetTriggerSync(attackWindupTrigger);
+        else if (HasTrigger(attackTrigger))
+            SetTriggerSync(attackTrigger);
+        PlayAttackWindupSfx();
 
-        // Windup phase - freeze movement during windup
+        // Windup phase - lock position and rotation
         float windup = Mathf.Max(0f, enemyData.attackWindup);
         while (windup > 0f)
         {
             windup -= Time.deltaTime;
+            transform.rotation = lockedRotation;
             if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
             yield return null;
         }
 
-        // Impact animation trigger
-        if (animator != null && HasTrigger(attackImpactTrigger))
-            animator.SetTrigger(attackImpactTrigger);
+        // Impact animation trigger (sync to network)
+        if (HasTrigger(attackImpactTrigger))
+            SetTriggerSync(attackImpactTrigger);
+        PlayAttackImpactSfx();
 
         // Apply damage after windup
         float radius = Mathf.Max(0.8f, enemyData.attackRange);
@@ -155,17 +153,20 @@ public class BungisngisAI : BaseEnemyAI
         foreach (var c in cols)
         {
             var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null) ps.TakeDamage(enemyData.basicDamage);
+            if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, enemyData.basicDamage);
         }
 
-        // Post-stop using attackMoveLock duration
+        // Exhausted phase - lock position, rotation, set Exhausted animator
         float post = Mathf.Max(0.1f, enemyData.attackMoveLock);
+        if (post > 0f && HasBool("Exhausted")) SetBoolSync("Exhausted", true);
         while (post > 0f)
         {
             post -= Time.deltaTime;
+            transform.rotation = lockedRotation;
             if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
             yield return null;
         }
+        if (HasBool("Exhausted")) SetBoolSync("Exhausted", false);
 
         lastAttackTime = Time.time;
         attackLockTimer = enemyData.attackMoveLock;
@@ -214,34 +215,28 @@ public class BungisngisAI : BaseEnemyAI
     {
         BeginAction(AIState.Special1);
         
-        // Windup phase - separate trigger, VFX, and SFX
-        if (animator != null && HasTrigger(laughWindupTrigger))
-            animator.SetTrigger(laughWindupTrigger);
-        if (audioSource != null && laughWindupSFX != null) 
-            audioSource.PlayOneShot(laughWindupSFX);
+        // Windup phase - separate trigger, VFX, and SFX (sync to network)
+        if (HasTrigger(laughWindupTrigger))
+            SetTriggerSync(laughWindupTrigger);
+        PlaySfx(laughWindupSFX);
         GameObject wind = null;
         if (laughWindupVFX != null)
         {
-            wind = Instantiate(laughWindupVFX, transform);
-            wind.transform.localPosition = laughWindupVFXOffset;
-            if (laughWindupVFXScale > 0f) 
-                wind.transform.localScale = Vector3.one * laughWindupVFXScale;
+            Vector3 scale = laughWindupVFXScale > 0f ? Vector3.one * laughWindupVFXScale : Vector3.one;
+            wind = SpawnVFXSync(laughWindupVFX, laughWindupVFXOffset, scale, true);
         }
         yield return new WaitForSeconds(Mathf.Max(0f, laughWindup));
         if (wind != null) Destroy(wind);
         
-        // Impact phase - separate trigger, VFX, and SFX
-        if (animator != null && HasTrigger(laughMainTrigger))
-            animator.SetTrigger(laughMainTrigger);
+        // Impact phase - separate trigger, VFX, and SFX (sync to network)
+        if (HasTrigger(laughMainTrigger))
+            SetTriggerSync(laughMainTrigger);
         if (laughImpactVFX != null)
         {
-            var fx = Instantiate(laughImpactVFX, transform);
-            fx.transform.localPosition = laughImpactVFXOffset;
-            if (laughImpactVFXScale > 0f) 
-                fx.transform.localScale = Vector3.one * laughImpactVFXScale;
+            Vector3 scale = laughImpactVFXScale > 0f ? Vector3.one * laughImpactVFXScale : Vector3.one;
+            SpawnVFXSync(laughImpactVFX, laughImpactVFXOffset, scale, true);
         }
-        if (audioSource != null && laughImpactSFX != null) 
-            audioSource.PlayOneShot(laughImpactSFX);
+        PlaySfx(laughImpactSFX);
         // Shoot projectiles forward
         if (laughProjectilePrefab != null && laughProjectileCount > 0)
         {
@@ -252,14 +247,36 @@ public class BungisngisAI : BaseEnemyAI
                 float angle = startYaw + step * i;
                 Quaternion rot = transform.rotation * Quaternion.Euler(0f, angle, 0f);
                 Vector3 spawnPos = transform.position + rot * laughProjectileSpawnOffset;
-                var projObj = Instantiate(laughProjectilePrefab, spawnPos, rot);
-                var proj = projObj.GetComponent<BellyLaughProjectile>();
-                if (proj != null)
+                
+                // Network-safe instantiation
+                GameObject projObj;
+                if (PhotonNetwork.IsConnected && !PhotonNetwork.OfflineMode)
                 {
-                    proj.damage = laughDamage;
-                    proj.owner = this;
-                    proj.speed = laughProjectileSpeed;
-                    proj.lifetime = laughProjectileLifetime;
+                    // Use Resources path for Photon DefaultPool; fall back to prefab.name if path not set
+                    string prefabPath = string.IsNullOrEmpty(laughProjectileResourcePath)
+                        ? (laughProjectilePrefab != null ? laughProjectilePrefab.name : "")
+                        : laughProjectileResourcePath;
+                    projObj = PhotonNetwork.Instantiate(prefabPath, spawnPos, rot);
+                }
+                else
+                {
+                    projObj = Instantiate(laughProjectilePrefab, spawnPos, rot);
+                }
+                
+                // Optional configuration when a projectile script is present.
+                // Avoid direct type reference to keep assembly boundaries flexible.
+                var mb = projObj.GetComponent<MonoBehaviour>();
+                if (mb != null)
+                {
+                    var t = mb.GetType();
+                    var fDamage = t.GetField("damage");
+                    var fOwner = t.GetField("owner");
+                    var fSpeed = t.GetField("speed");
+                    var fLifetime = t.GetField("lifetime");
+                    if (fDamage != null) fDamage.SetValue(mb, laughDamage);
+                    if (fOwner != null) fOwner.SetValue(mb, this);
+                    if (fSpeed != null) fSpeed.SetValue(mb, laughProjectileSpeed);
+                    if (fLifetime != null) fLifetime.SetValue(mb, laughProjectileLifetime);
                 }
             }
         }
@@ -276,7 +293,7 @@ public class BungisngisAI : BaseEnemyAI
             if (angle <= halfAngle)
             {
                 var ps = c.GetComponentInParent<PlayerStats>();
-                if (ps != null) ps.TakeDamage(laughDamage);
+                if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, laughDamage);
             }
         }
 
@@ -293,16 +310,16 @@ public class BungisngisAI : BaseEnemyAI
                     controller.SimpleMove(Vector3.zero);
                 
                 // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
-                if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
+                if (stopTimer <= quarterStoppage)
                 {
-                    animator.SetBool("Exhausted", true);
+                    SetBoolSync("Exhausted", true);
                 }
                 
                 yield return null;
             }
             
             // Clear Exhausted boolean parameter
-            if (animator != null) animator.SetBool("Exhausted", false);
+            SetBoolSync("Exhausted", false);
         }
 
         // Recovery time (AI can move but skill still on cooldown)
@@ -346,34 +363,28 @@ public class BungisngisAI : BaseEnemyAI
     {
         BeginAction(AIState.Special2);
         
-        // Windup phase - separate trigger, VFX, and SFX
-        if (animator != null && HasTrigger(poundWindupTrigger))
-            animator.SetTrigger(poundWindupTrigger);
-        if (audioSource != null && poundWindupSFX != null) 
-            audioSource.PlayOneShot(poundWindupSFX);
+        // Windup phase - separate trigger, VFX, and SFX (sync to network)
+        if (HasTrigger(poundWindupTrigger))
+            SetTriggerSync(poundWindupTrigger);
+        PlaySfx(poundWindupSFX);
         GameObject wind = null;
         if (poundWindupVFX != null)
         {
-            wind = Instantiate(poundWindupVFX, transform);
-            wind.transform.localPosition = poundWindupVFXOffset;
-            if (poundWindupVFXScale > 0f) 
-                wind.transform.localScale = Vector3.one * poundWindupVFXScale;
+            Vector3 scale = poundWindupVFXScale > 0f ? Vector3.one * poundWindupVFXScale : Vector3.one;
+            wind = SpawnVFXSync(poundWindupVFX, poundWindupVFXOffset, scale, true);
         }
         yield return new WaitForSeconds(Mathf.Max(0f, poundWindup));
         if (wind != null) Destroy(wind);
         
-        // Impact phase - separate trigger, VFX, and SFX
-        if (animator != null && HasTrigger(poundMainTrigger))
-            animator.SetTrigger(poundMainTrigger);
+        // Impact phase - separate trigger, VFX, and SFX (sync to network)
+        if (HasTrigger(poundMainTrigger))
+            SetTriggerSync(poundMainTrigger);
         if (poundImpactVFX != null)
         {
-            var fx = Instantiate(poundImpactVFX, transform);
-            fx.transform.localPosition = poundImpactVFXOffset;
-            if (poundImpactVFXScale > 0f) 
-                fx.transform.localScale = Vector3.one * poundImpactVFXScale;
+            Vector3 scale = poundImpactVFXScale > 0f ? Vector3.one * poundImpactVFXScale : Vector3.one;
+            SpawnVFXSync(poundImpactVFX, poundImpactVFXOffset, scale, true);
         }
-        if (audioSource != null && poundImpactSFX != null) 
-            audioSource.PlayOneShot(poundImpactSFX);
+        PlaySfx(poundImpactSFX);
 
         // strip: project forward; hit players within width band
         var all = Physics.OverlapSphere(transform.position + transform.forward * (poundRadius * 0.5f), poundRadius, LayerMask.GetMask("Player"));
@@ -387,7 +398,7 @@ public class BungisngisAI : BaseEnemyAI
             if (along >= 0f && along <= poundRadius && Mathf.Abs(across) <= (poundWidth * 0.5f))
             {
                 var ps = c.GetComponentInParent<PlayerStats>();
-                if (ps != null) ps.TakeDamage(poundDamage);
+                if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, poundDamage);
             }
         }
 
@@ -404,16 +415,16 @@ public class BungisngisAI : BaseEnemyAI
                     controller.SimpleMove(Vector3.zero);
                 
                 // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
-                if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
+                if (stopTimer <= quarterStoppage)
                 {
-                    animator.SetBool("Exhausted", true);
+                    SetBoolSync("Exhausted", true);
                 }
                 
                 yield return null;
             }
             
             // Clear Exhausted boolean parameter
-            if (animator != null) animator.SetBool("Exhausted", false);
+            SetBoolSync("Exhausted", false);
         }
 
         // Recovery time (AI can move but skill still on cooldown)

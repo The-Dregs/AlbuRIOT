@@ -107,6 +107,60 @@ MonoBehaviour:
   - RPC_Revive
   - RPC_SetDowned
   - RPC_PlayCrawlDeath
+  - RPC_MasterDestroy
+  - RPC_RemoveBuffVFX
+  - RPC_SpawnVFX
+  - RPC_SpawnVFXAtPosition
+  - RPC_GrantItem
+  - RPC_UpdateVFXScale
+  - RPC_RequestProgressUpdate
+  - RPC_RequestQuestStateSync
+  - RPC_SyncFullQuestState
+  - RPC_UpdateMultiItemProgress
+  - RPC_RequestPickup
+  - RPC_SyncPickupState
+  - RPC_PlayQuestCutscene
+  - RPC_SkipQuestCutscene
+  - RPC_PlayEndingCutscene
+  - RPC_SyncSpawnPositions
+  - RPC_SpawnGodModeBuffVFX
+  - RPC_PhaseChanged
+  - RPC_BakunawaSetTrigger
+  - RPC_BakunawaSetHeadExhausted
+  - RPC_TriggerCutscene
+  - RPC_SkipAreaCutscene
+  - RPC_AllQuestsCompleted_LoadNextMap
+  - RPC_SyncQuestStatePayload
+  - RPC_CompleteCollectObjectiveForAll
+  - RPC_RequestCollectObjectiveCompletion
+  - RPC_SyncTerrainSeed
+  - RPC_SyncDecorSeed
+  - RPC_ForceClockSync
+  - RPC_GrantBuffToOwnedPlayers
+  - RPC_SetCampVisualCleared
+  - RPC_SetSpawnedEnemyParent
+  - RPC_SetGeneratedParent
+  - RPC_PlayKapreAbilitySfx
+  - RPC_ApplyCutsceneCameraUprightOverride
+  - RPC_PlayAttackSound
+  - RPC_PlayComboComplete
+  - RPC_PlayFootstep
+  - RPC_PlayHitSound
+  - RPC_PlayJumpSound
+  - RPC_PlayLandSound
+  - RPC_PlayRollSound
+  - RPC_SyncCollectCompletionCount
+  - RpcSpawnComboHitVFX
+  - RpcSpawnHitImpactVFX
+  - RPC_RequestMapTransition
+  - RPC_PlayHitObjectSound
+  - RPC_RequestNetworkDestroy
+  - RPC_RequestDecorSeed
+  - RPC_RequestCameraStateFromHost
+  - RPC_RequestFogFromHost
+  - RPC_SetFogPixels
+  - RPC_SetMinimapCameraState
+  - RPC_RequestCompletedQuestEnemySpawn
   DisableAutoOpenWizard: 1
   ShowSettings: 1
   DevRegionSetOnce: 1

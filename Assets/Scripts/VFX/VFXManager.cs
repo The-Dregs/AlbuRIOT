@@ -3,7 +3,8 @@ using Photon.Pun;
 using System;
 using System.Collections.Generic;
 
-public class VFXManager : MonoBehaviourPun
+[AddComponentMenu("AlbuRIOT/Effects Manager")]
+public class EffectsManager : MonoBehaviourPun
 {
     [Header("VFX Configuration")]
     public Transform vfxSpawnPoint;
@@ -18,8 +19,33 @@ public class VFXManager : MonoBehaviourPun
     [Header("Debuff VFX")]
     public DebuffVFXData[] debuffVFXData;
     
-    [Header("Audio")]
+    [Header("Audio Source")]
+    [Tooltip("Auto-found in children if not assigned")]
     public AudioSource audioSource;
+    
+    [Header("SFX - Attack")]
+    public AudioClip[] attackSoundsUnarmed;
+    public AudioClip[] attackSoundsArmed;
+    public AudioClip comboCompleteSound;
+    [Range(0f, 1f)] public float attackVolume = 0.8f;
+    
+    [Header("SFX - Movement")]
+    public AudioClip[] footstepSoundsWalk;
+    public AudioClip[] footstepSoundsRun;
+    public AudioClip jumpSound;
+    public AudioClip landSound;
+    public AudioClip rollSound;
+    [Tooltip("Time between footsteps while walking")]
+    public float footstepIntervalWalk = 0.6f;
+    [Tooltip("Time between footsteps while running")]
+    public float footstepIntervalRun = 0.4f;
+    [Range(0f, 1f)] public float footstepVolume = 0.5f;
+    [Range(0f, 1f)] public float movementVolume = 0.7f;
+    
+    [Header("SFX - Combat & Damage")]
+    public AudioClip[] hitSounds;
+    public AudioClip deathSound;
+    [Range(0f, 1f)] public float hitVolume = 1f;
     
     // Active VFX tracking
     private List<GameObject> activeVFX = new List<GameObject>();
@@ -38,13 +64,31 @@ public class VFXManager : MonoBehaviourPun
         debuffManager = GetComponent<DebuffManager>();
         
         if (audioSource == null)
+            audioSource = GetComponentInChildren<AudioSource>();
+        if (audioSource == null)
             audioSource = GetComponent<AudioSource>();
     }
     
     void Update()
     {
-        // Clean up expired VFX
         CleanupExpiredVFX();
+    }
+    
+    void OnDestroy()
+    {
+        // Stop all coroutines
+        StopAllCoroutines();
+        
+        // Stop all VFX
+        StopAllVFX();
+        
+        // Clear event subscriptions
+        OnVFXPlayed = null;
+        OnVFXStopped = null;
+        
+        // Clear active VFX list
+        if (activeVFX != null)
+            activeVFX.Clear();
     }
     
     #region Moveset VFX
@@ -77,9 +121,16 @@ public class VFXManager : MonoBehaviourPun
     [PunRPC]
     public void RPC_PlayMovesetVFX(string movesetName, string moveName, Vector3 position, Quaternion rotation)
     {
-        if (photonView != null && !photonView.IsMine) return;
-        
-        PlayMovesetVFX(movesetName, moveName, position, rotation);
+        // Execute locally on remote clients without re-broadcasting
+        MovesetVFXData vfxData = GetMovesetVFXData(movesetName, moveName);
+        if (vfxData == null) return;
+        GameObject vfx = InstantiateVFX(vfxData.vfxPrefab, position, rotation);
+        if (vfx != null)
+        {
+            SetupVFX(vfx, vfxData);
+            PlayVFXAudio(vfxData.audioClip);
+            OnVFXPlayed?.Invoke($"{movesetName}_{moveName}");
+        }
     }
     
     #endregion
@@ -114,9 +165,16 @@ public class VFXManager : MonoBehaviourPun
     [PunRPC]
     public void RPC_PlayPowerStealVFX(string enemyName, Vector3 position, Quaternion rotation)
     {
-        if (photonView != null && !photonView.IsMine) return;
-        
-        PlayPowerStealVFX(enemyName, position, rotation);
+        // Execute locally on remote clients without re-broadcasting
+        PowerStealVFXData vfxData = GetPowerStealVFXData(enemyName);
+        if (vfxData == null) return;
+        GameObject vfx = InstantiateVFX(vfxData.vfxPrefab, position, rotation);
+        if (vfx != null)
+        {
+            SetupVFX(vfx, vfxData);
+            PlayVFXAudio(vfxData.audioClip);
+            OnVFXPlayed?.Invoke($"PowerSteal_{enemyName}");
+        }
     }
     
     #endregion
@@ -151,9 +209,16 @@ public class VFXManager : MonoBehaviourPun
     [PunRPC]
     public void RPC_PlayDebuffVFX(string debuffName, Vector3 position, Quaternion rotation)
     {
-        if (photonView != null && !photonView.IsMine) return;
-        
-        PlayDebuffVFX(debuffName, position, rotation);
+        // Execute locally on remote clients without re-broadcasting
+        DebuffVFXData vfxData = GetDebuffVFXData(debuffName);
+        if (vfxData == null) return;
+        GameObject vfx = InstantiateVFX(vfxData.vfxPrefab, position, rotation);
+        if (vfx != null)
+        {
+            SetupVFX(vfx, vfxData);
+            PlayVFXAudio(vfxData.audioClip);
+            OnVFXPlayed?.Invoke($"Debuff_{debuffName}");
+        }
     }
     
     #endregion
@@ -291,13 +356,81 @@ public class VFXManager : MonoBehaviourPun
     
     public void StopVFX(string vfxName)
     {
-        // This would need to be implemented based on your VFX naming system
         Debug.Log($"Stopping VFX: {vfxName}");
         OnVFXStopped?.Invoke(vfxName);
     }
     
     #endregion
+    
+    #region SFX - Public Play Methods
+    
+    public void PlayAttackSound(bool isArmed, int comboIndex)
+    {
+        if (audioSource == null) return;
+        AudioClip[] clips = isArmed ? attackSoundsArmed : attackSoundsUnarmed;
+        if (clips == null || clips.Length == 0) return;
+        AudioClip clip = comboIndex < clips.Length && clips[comboIndex] != null ? clips[comboIndex] : clips[UnityEngine.Random.Range(0, clips.Length)];
+        if (clip != null) audioSource.PlayOneShot(clip, attackVolume);
+    }
+    
+    public void PlayComboCompleteSound()
+    {
+        if (audioSource != null && comboCompleteSound != null)
+            audioSource.PlayOneShot(comboCompleteSound, attackVolume);
+    }
+    
+    public void PlayFootstepSound(bool isRunning)
+    {
+        if (audioSource == null) return;
+        AudioClip[] clips = isRunning ? footstepSoundsRun : footstepSoundsWalk;
+        if (clips == null || clips.Length == 0) return;
+        AudioClip clip = clips[UnityEngine.Random.Range(0, clips.Length)];
+        if (clip != null) audioSource.PlayOneShot(clip, footstepVolume);
+    }
+    
+    public void PlayJumpSound()
+    {
+        if (audioSource != null && jumpSound != null)
+            audioSource.PlayOneShot(jumpSound, movementVolume);
+    }
+    
+    public void PlayLandSound()
+    {
+        if (audioSource != null && landSound != null)
+            audioSource.PlayOneShot(landSound, movementVolume);
+    }
+    
+    public void PlayRollSound()
+    {
+        if (audioSource != null && rollSound != null)
+            audioSource.PlayOneShot(rollSound, movementVolume);
+    }
+    
+    public void PlayHitSound()
+    {
+        if (audioSource == null || hitSounds == null || hitSounds.Length == 0) return;
+        AudioClip clip = hitSounds[UnityEngine.Random.Range(0, hitSounds.Length)];
+        if (clip != null) audioSource.PlayOneShot(clip, hitVolume);
+    }
+    
+    public void PlayDeathSound()
+    {
+        if (audioSource != null && deathSound != null)
+            audioSource.PlayOneShot(deathSound, hitVolume);
+    }
+    
+    /// <summary>Play a one-shot clip (for custom SFX).</summary>
+    public void PlayOneShot(AudioClip clip, float volumeScale = 1f)
+    {
+        if (audioSource != null && clip != null)
+            audioSource.PlayOneShot(clip, volumeScale);
+    }
+    
+    #endregion
 }
+
+/// <summary>Backwards compatibility alias. Use EffectsManager instead.</summary>
+public class VFXManager : EffectsManager { }
 
 [System.Serializable]
 public class VFXDataBase

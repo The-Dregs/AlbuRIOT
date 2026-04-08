@@ -53,7 +53,7 @@ The loader will automatically load trades on Awake and populate the shop.
 
 Use the exact `itemName` from your ItemData ScriptableObjects:
 - "Aloe Vera"
-- "Lunar Lillies"
+- "Lunar Lily"
 - "Bolo Knife"
 - "Geranium"
 - etc.
@@ -83,7 +83,7 @@ Check Assets/Resources/Items/1ItemData/ for available items.
 {
   "tradeName": "Herbal Bundle",
   "description": "Combine different herbs.",
-  "requiredItemNames": ["Aloe Vera", "Lunar Lillies"],
+  "requiredItemNames": ["Aloe Vera", "Lunar Lily"],
   "requiredQuantities": [2, 2],
   "rewardItemName": "Geranium",
   "rewardQuantity": 5,

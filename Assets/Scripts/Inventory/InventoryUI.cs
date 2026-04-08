@@ -44,8 +44,13 @@ public class InventoryUI : MonoBehaviour
         {
             playerInventory.OnInventoryChanged -= RefreshUI;
             playerInventory.OnInventoryChanged += RefreshUI;
+            Debug.Log($"[InventoryUI] Subscribed to inventory changes on {playerInventory.gameObject.name}");
         }
-        // draw once and set state snapshot
+        else
+        {
+            Debug.LogWarning("[InventoryUI] playerInventory is null in Start() - UI may not update!");
+        }
+        // draw once and set state signature
         _lastStateSignature = BuildStateSignature();
         RefreshUI();
     }
@@ -229,7 +234,11 @@ public class InventoryUI : MonoBehaviour
 
     public void RefreshUI()
     {
-        if (playerInventory == null) return;
+        if (playerInventory == null)
+        {
+            Debug.LogWarning("[InventoryUI] RefreshUI called but playerInventory is null!");
+            return;
+        }
 
         // fixed six-slot UI binding (defensive against partial assignment)
         int uiCount = (slotUIs != null) ? slotUIs.Length : 0;
@@ -337,7 +346,12 @@ public class InventoryUI : MonoBehaviour
         }
         Debug.Log($"[inventory] Equip SlotIndex={slotIndex}, Item={(slot.item != null ? slot.item.itemName : "null")}");
         bool ok = equipmentManager.TryEquipFromInventorySlot(playerInventory, slot);
-        if (ok) RefreshUI();
+        if (ok)
+        {
+            // Clear stale hover state so Unequip button appears immediately after equipping.
+            _hoveredItem = null;
+            RefreshUI();
+        }
         return ok;
     }
 
@@ -379,7 +393,12 @@ public class InventoryUI : MonoBehaviour
         
         // Remove one from inventory
         bool removed = playerInventory.RemoveItem(slot.item, 1);
-        if (removed) RefreshUI();
+        if (removed)
+        {
+            // Consumables can destroy/move slot contents under the pointer; clear stale hover.
+            _hoveredItem = null;
+            RefreshUI();
+        }
         return removed;
     }
 

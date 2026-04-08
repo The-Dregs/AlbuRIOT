@@ -25,8 +25,8 @@ MonoBehaviour:
   healAmount: 10
   staminaRestore: 15
   effectDuration: 0
-  isQuestItem: 0
-  questId: 
+  isQuestItem: 1
+  questId: Sugarcane
   canBeOffered: 0
   offeringValue: 1
   grantsPower: 0

@@ -1,6 +1,7 @@
 using UnityEngine;
 using Photon.Pun;
 using System.Collections;
+using System;
 
 public class PlayerCombat : MonoBehaviourPun
 {
@@ -19,9 +20,11 @@ public class PlayerCombat : MonoBehaviourPun
     public float attackForwardOffset = 0.0f;
 
     [Header("Combo System")]
-    [SerializeField] private float comboWindow = 0.8f; // Time to continue combo after hit
-    [SerializeField] private float comboInputDelay = 0.3f; // Minimum delay before next hit input can be registered
+    [SerializeField] private float comboWindow = 1.0f; // Time to continue combo after hit (increased for better feel)
+    [SerializeField] private float comboInputDelay = 0.2f; // Minimum delay before next hit input can be registered (reduced for responsiveness)
+    [SerializeField] private float comboInputBuffer = 0.3f; // Buffer time to accept input before it's valid (for smoother combos)
     [SerializeField] private float[] comboDamageMultipliers = { 1.0f, 1.2f, 1.5f }; // Damage multiplier per hit
+    [SerializeField] private bool enableComboInputBuffering = true; // Buffer inputs during attack for smoother combos
     
     [Header("Attack Durations")]
     [SerializeField] private float[] unarmedAttackDurations = { 0.4f, 0.4f }; // Duration of each unarmed attack (2 hits)
@@ -29,12 +32,43 @@ public class PlayerCombat : MonoBehaviourPun
     
     [Header("Hit Stop Effect")]
     [SerializeField] private float hitStopDuration = 0.05f; // Duration of hit-stop effect when hitting enemies
+    [SerializeField] private float[] comboHitStopDurations = { 0.05f, 0.08f, 0.12f }; // Hit-stop duration per combo hit (increases with combo)
+    
+    [Header("Combo VFX/Audio")]
+    [Tooltip("VFX prefabs for each combo hit (optional)")]
+    [SerializeField] private GameObject[] comboHitVFX = new GameObject[3];
+    [Tooltip("Audio clips for each combo hit (optional - deprecated, use PlayerAudioManager instead)")]
+    [SerializeField] private AudioClip[] comboHitSounds = new AudioClip[3];
+    [Tooltip("Audio clip for combo completion (optional - deprecated, use PlayerAudioManager instead)")]
+    [SerializeField] private AudioClip comboCompleteSound;
+    
+    [Header("Hit Impact VFX")]
+    [Tooltip("VFX prefab to spawn when hitting an enemy. Spawns at the hit location on the enemy.")]
+    [SerializeField] private GameObject hitImpactVFX;
+    [Tooltip("Height offset for hit VFX spawn position (relative to enemy position)")]
+    [SerializeField] private float hitVFXHeightOffset = 0.5f;
+    [Tooltip("Use raycast to find exact hit point on enemy collider (more accurate but slightly more expensive)")]
+    [SerializeField] private bool useRaycastForHitPoint = true;
+    
+    [Header("Hit Impact SFX")]
+    [Tooltip("Generic SFX played when a hit actually connects (enemy or destructible plant). Used as fallback when specific clips are not set.")]
+    [SerializeField] private AudioClip hitImpactSfx;
+    [SerializeField, Range(0f, 1f)] private float hitImpactSfxVolume = 0.85f;
+    [Tooltip("SFX played when an UNARMED hit connects. If set, overrides the generic hit SFX for unarmed attacks.")]
+    [SerializeField] private AudioClip unarmedHitImpactSfx;
+    [SerializeField, Range(0f, 1f)] private float unarmedHitImpactSfxVolume = 0.85f;
+    [Tooltip("SFX played when an ARMED hit connects. If set, overrides the generic hit SFX for armed attacks.")]
+    [SerializeField] private AudioClip armedHitImpactSfx;
+    [SerializeField, Range(0f, 1f)] private float armedHitImpactSfxVolume = 0.85f;
+    private AudioSource audioSource;
+    private PlayerAudioManager audioManager;
     
     [Header("Attack Rotation")]
     [SerializeField] private float attackRotationSpeed = 720f; // Degrees per second - fast and snappy rotation towards camera
     
     [Header("VFX Integration")]
-    public VFXManager vfxManager;
+    public EffectsManager effectsManager;
+    public VFXManager vfxManager; // backwards compat
     public PowerStealManager powerStealManager;
     
     [Header("Managers")]
@@ -43,6 +77,7 @@ public class PlayerCombat : MonoBehaviourPun
     
     [Header("Camera")]
     public Transform cameraPivot; // Camera pivot transform for camera-relative attacks
+    private CameraShake cameraShake;
     
     private float nextAttackTime = 0f;
     private PlayerStats stats;
@@ -52,12 +87,23 @@ public class PlayerCombat : MonoBehaviourPun
 
     // Combo state
     private int currentComboIndex = 0;
+    public int CurrentComboIndex => currentComboIndex;
+    public int ComboCount => currentComboIndex + 1; // Public accessor for UI
+    public bool IsArmed => equipmentManager != null && equipmentManager.equippedItem != null;
     private float comboWindowTimer = 0f;
     private float comboInputDelayTimer = 0f;
+    private float comboInputBufferTimer = 0f; // Buffer timer for queued inputs
     private bool isPerformingCombo = false;
+    private bool hasBufferedInput = false; // Track if input was buffered
     private Coroutine currentAttackCoroutine = null;
     // Ensures we never trigger attack animation without enough stamina
     private bool hasPaidForCurrentHit = false;
+    
+    // Events for UI feedback
+    public System.Action<int> OnComboHit; // Fired when a combo hit connects
+    public System.Action<int> OnComboProgress; // Fired when combo progresses (hitNumber)
+    public System.Action OnComboReset; // Fired when combo resets
+    public System.Action OnComboComplete; // Fired when full combo completes
 
     // track last damaged enemy root to attribute kills for power stealing
     public Transform LastHitEnemyRoot { get; private set; }
@@ -79,7 +125,11 @@ public class PlayerCombat : MonoBehaviourPun
         if (movesetManager == null)
             movesetManager = GetComponent<MovesetManager>();
             
-        // Auto-find VFX manager
+        // Auto-find Effects manager (VFX + SFX)
+        if (effectsManager == null)
+            effectsManager = GetComponent<EffectsManager>();
+        if (effectsManager == null)
+            effectsManager = GetComponent<VFXManager>();
         if (vfxManager == null)
             vfxManager = GetComponent<VFXManager>();
             
@@ -94,6 +144,32 @@ public class PlayerCombat : MonoBehaviourPun
         // Get player controller for hit-stop
         playerController = GetComponent<ThirdPersonController>();
         
+        // Find camera shake component
+        FindCameraShake();
+    }
+    
+    private void FindCameraShake()
+    {
+        // Try to find CameraShake on camera or camera rig
+        if (cameraPivot != null)
+        {
+            cameraShake = cameraPivot.GetComponentInChildren<CameraShake>();
+        }
+        
+        // Fallback: search in scene
+        if (cameraShake == null)
+        {
+            cameraShake = FindFirstObjectByType<CameraShake>();
+        }
+        
+        // Get or create audio source (fallback if PlayerAudioManager not available)
+        audioSource = GetComponent<AudioSource>();
+        if (audioSource == null)
+            audioSource = gameObject.AddComponent<AudioSource>();
+        
+        // Get PlayerAudioManager for better audio handling
+        audioManager = GetComponent<PlayerAudioManager>();
+        
         // Auto-find camera pivot from ThirdPersonController
         if (cameraPivot == null && playerController != null)
         {
@@ -106,7 +182,7 @@ public class PlayerCombat : MonoBehaviourPun
             }
         }
     }
-
+    
     private bool canControl = true;
 
     public void SetCanControl(bool value)
@@ -144,15 +220,73 @@ public class PlayerCombat : MonoBehaviourPun
         {
             comboInputDelayTimer -= Time.deltaTime;
         }
-
-        // Handle attack input - can only trigger if not currently performing an attack and attack animation is complete
-        bool inputOk = Input.GetMouseButtonDown(0);
         
-        // CRITICAL: Block all attacks if currently attacking or attack animation hasn't finished
-        bool canAttack = !isPerformingCombo && !IsAttacking && comboInputDelayTimer <= 0f && Time.time >= nextAttackTime;
-        
-        if (inputOk && canAttack)
+        // Update combo input buffer timer
+        if (comboInputBufferTimer > 0f)
         {
+            comboInputBufferTimer -= Time.deltaTime;
+        }
+
+        // Set stance bools when combo is active (performing attack or in combo window)
+        bool comboActive = comboWindowTimer > 0f || isPerformingCombo;
+        if (animator != null)
+        {
+            if (comboActive)
+            {
+                if (IsArmed)
+                {
+                    if (AnimatorHasParameter(animator, "IsArmedStance")) animator.SetBool("IsArmedStance", true);
+                    if (AnimatorHasParameter(animator, "IsUnarmedStance")) animator.SetBool("IsUnarmedStance", false);
+                }
+                else
+                {
+                    if (AnimatorHasParameter(animator, "IsUnarmedStance")) animator.SetBool("IsUnarmedStance", true);
+                    if (AnimatorHasParameter(animator, "IsArmedStance")) animator.SetBool("IsArmedStance", false);
+                }
+            }
+            else
+            {
+                if (AnimatorHasParameter(animator, "IsUnarmedStance")) animator.SetBool("IsUnarmedStance", false);
+                if (AnimatorHasParameter(animator, "IsArmedStance")) animator.SetBool("IsArmedStance", false);
+            }
+        }
+
+        // Handle attack input
+        bool inputPressed = Input.GetMouseButtonDown(0);
+        
+        // Prevent input spam: only allow ONE buffered input at a time
+        if (inputPressed && enableComboInputBuffering)
+        {
+            if (IsAttacking || isPerformingCombo)
+            {
+                // Only buffer if we don't already have a buffered input
+                // This prevents spam-clicking from queuing multiple attacks
+                if (!hasBufferedInput)
+                {
+                    hasBufferedInput = true;
+                    comboInputBufferTimer = comboInputBuffer;
+                    Debug.Log("[Combo] Input buffered - waiting for attack to complete");
+                }
+                else
+                {
+                    // Already have buffered input, ignore this spam click
+                    Debug.Log("[Combo] Input spam ignored - already have buffered input");
+                }
+            }
+        }
+        
+        // Check if we can process attack (either immediate or buffered)
+        // IMPORTANT: Also check if hit-stop is active (hitStopCoroutine != null)
+        bool isHitStopActive = hitStopCoroutine != null;
+        bool canProcessInput = !isPerformingCombo && !IsAttacking && !isHitStopActive && comboInputDelayTimer <= 0f && Time.time >= nextAttackTime;
+        bool hasValidInput = inputPressed || (hasBufferedInput && comboInputBufferTimer > 0f);
+        
+        if (hasValidInput && canProcessInput)
+        {
+            // Clear buffered input
+            hasBufferedInput = false;
+            comboInputBufferTimer = 0f;
+            
             var controller = GetComponent<ThirdPersonController>();
             bool groundedOk = controller != null && controller.CanAttack;
             
@@ -200,17 +334,14 @@ public class PlayerCombat : MonoBehaviourPun
     
     private void StartComboAttack()
     {
-        // Clear stance bools when starting a new attack
-        if (animator != null)
-        {
-            animator.SetBool("IsUnarmedStance", false);
-            animator.SetBool("IsArmedStance", false);
-        }
-        
         currentComboIndex = 0;
         bool isArmed = equipmentManager != null && equipmentManager.equippedItem != null;
         int maxCombo = GetMaxComboCount();
         Debug.Log($"[Combo] Starting combo attack - Mode: {(isArmed ? "Armed" : "Unarmed")}, Max Hits: {maxCombo}");
+        
+        // Fire combo progress event
+        OnComboProgress?.Invoke(1);
+        
         PerformComboHit();
     }
     
@@ -228,7 +359,12 @@ public class PlayerCombat : MonoBehaviourPun
         }
         
         currentComboIndex++;
-        Debug.Log($"[Combo] Continuing combo - Hit {currentComboIndex + 1}/{maxCombo}");
+        int hitNumber = currentComboIndex + 1;
+        Debug.Log($"[Combo] Continuing combo - Hit {hitNumber}/{maxCombo}");
+        
+        // Fire combo progress event
+        OnComboProgress?.Invoke(hitNumber);
+        
         PerformComboHit();
     }
     
@@ -323,6 +459,10 @@ public class PlayerCombat : MonoBehaviourPun
         float attackDuration = (currentComboIndex < durations.Length) 
             ? durations[currentComboIndex] 
             : (durations.Length > 0 ? durations[0] : 0.4f);
+        
+        // Calculate impact time (when damage should be applied - typically 60-70% through animation)
+        float impactTime = attackDuration * 0.65f;
+        bool damageApplied = false;
             
         isAttackingTimer = attackDuration;
         nextAttackTime = Time.time + attackDuration;
@@ -332,13 +472,35 @@ public class PlayerCombat : MonoBehaviourPun
         while (elapsed < attackDuration)
         {
             elapsed += Time.deltaTime;
+            
+            // Apply damage at impact time (more responsive feel)
+            if (!damageApplied && elapsed >= impactTime)
+            {
+                ApplyComboDamage();
+                damageApplied = true;
+                
+                // Play combo hit VFX/Audio
+                PlayComboHitEffects(currentComboIndex);
+            }
+            
             // Keep rotation locked to camera-facing direction throughout attack
             transform.rotation = lockedRotation;
             yield return null;
         }
         
-        // Apply damage after attack duration
-        ApplyComboDamage();
+        // Ensure damage is applied even if impact time wasn't reached (safety)
+        if (!damageApplied)
+        {
+            ApplyComboDamage();
+            PlayComboHitEffects(currentComboIndex);
+        }
+        
+        // Wait for hit-stop to complete before allowing next input
+        // This ensures the hit-stop effect doesn't interfere with combo flow
+        while (hitStopCoroutine != null)
+        {
+            yield return null;
+        }
         
         // Set input delay timer before allowing next input
         comboInputDelayTimer = comboInputDelay;
@@ -346,32 +508,26 @@ public class PlayerCombat : MonoBehaviourPun
         // Check if combo is complete
         if (currentComboIndex >= maxCombo - 1)
         {
-            // Combo complete - set stance bool to allow transition to stance state
-            // isArmed already declared at top of method
-            if (animator != null)
-            {
-                if (isArmed)
-                {
-                    animator.SetBool("IsArmedStance", true);
-                    animator.SetBool("IsUnarmedStance", false);
-                }
-                else
-                {
-                    animator.SetBool("IsUnarmedStance", true);
-                    animator.SetBool("IsArmedStance", false);
-                }
-            }
             Debug.Log($"[Combo] Combo complete! Setting {(isArmed ? "Armed" : "Unarmed")} stance.");
+            
+            // Fire combo complete event
+            OnComboComplete?.Invoke();
+            
+            // Play combo complete sound (prefer EffectsManager, then PlayerAudioManager)
+            if (effectsManager != null)
+                effectsManager.PlayComboCompleteSound();
+            else if (audioManager != null)
+                audioManager.PlayComboCompleteSound();
+            else if (comboCompleteSound != null && audioSource != null)
+            {
+                // Fallback to direct audio source
+                audioSource.PlayOneShot(comboCompleteSound);
+            }
+            
             ResetCombo();
         }
         else
         {
-            // Clear stance bools during combo (not final hit yet)
-            if (animator != null)
-            {
-                animator.SetBool("IsUnarmedStance", false);
-                animator.SetBool("IsArmedStance", false);
-            }
             // Set combo window timer for next hit
             comboWindowTimer = comboWindow;
             Debug.Log($"[Combo] Combo window opened ({comboWindow}s) - Next hit available in {comboInputDelay}s");
@@ -407,6 +563,19 @@ public class PlayerCombat : MonoBehaviourPun
             if (mb != null) uniqueEnemies.Add(mb.gameObject);
         }
 
+        // fallback: if layer mask missed an enemy (e.g. collider on a different layer),
+        // run a second pass over all colliders and still look for IEnemyDamageable.
+        if (uniqueEnemies.Count == 0)
+        {
+            Collider[] allHits = Physics.OverlapSphere(damageCenter, radius);
+            foreach (var enemy in allHits)
+            {
+                var dmg = enemy.GetComponentInParent<IEnemyDamageable>();
+                var mb = dmg as MonoBehaviour;
+                if (mb != null) uniqueEnemies.Add(mb.gameObject);
+            }
+        }
+
         // Calculate base damage
         int baseDamage = stats.baseDamage;
         if (movesetManager != null && movesetManager.CurrentMoveset != null)
@@ -428,18 +597,65 @@ public class PlayerCombat : MonoBehaviourPun
             EnemyDamageRelay.Apply(go, finalDamage, gameObject);
             LastHitEnemyRoot = go.transform;
             hitEnemy = true;
+            
+            // Spawn hit impact VFX at hit location
+            SpawnHitImpactVFX(go, originPos, originFwd);
         }
+
+        if (hitEnemy && photonView != null && photonView.IsMine)
+            PlayHitImpactSfx();
         
         // Trigger hit-stop effect if we hit an enemy
         if (hitEnemy && hitStopDuration > 0f && photonView != null && photonView.IsMine)
         {
+            // Stop any existing hit-stop (shouldn't happen, but safety check)
             if (hitStopCoroutine != null)
                 StopCoroutine(hitStopCoroutine);
-            hitStopCoroutine = StartCoroutine(CoHitStop(uniqueEnemies));
+            
+            // Use combo-specific hit-stop duration if available
+            float stopDuration = hitStopDuration;
+            if (comboHitStopDurations != null && currentComboIndex < comboHitStopDurations.Length)
+            {
+                stopDuration = comboHitStopDurations[currentComboIndex];
+            }
+            
+            // Start hit-stop coroutine (will be tracked by hitStopCoroutine)
+            hitStopCoroutine = StartCoroutine(CoHitStop(uniqueEnemies, stopDuration));
+            
+            // Camera shake on hit
+            if (cameraShake != null)
+                cameraShake.ShakeHitEnemy();
+            
+            // Fire combo hit event for UI feedback
+            OnComboHit?.Invoke(ComboCount);
         }
     }
+
+    private void PlayHitImpactSfx()
+    {
+        if (audioSource == null) return;
+
+        // choose specific armed/unarmed clip when available, otherwise fall back to generic hit sfx
+        bool isArmed = equipmentManager != null && equipmentManager.equippedItem != null;
+        AudioClip clipToPlay = hitImpactSfx;
+        float volume = hitImpactSfxVolume;
+
+        if (isArmed && armedHitImpactSfx != null)
+        {
+            clipToPlay = armedHitImpactSfx;
+            volume = armedHitImpactSfxVolume;
+        }
+        else if (!isArmed && unarmedHitImpactSfx != null)
+        {
+            clipToPlay = unarmedHitImpactSfx;
+            volume = unarmedHitImpactSfxVolume;
+        }
+
+        if (clipToPlay == null) return;
+        audioSource.PlayOneShot(clipToPlay, volume);
+    }
     
-    private IEnumerator CoHitStop(System.Collections.Generic.HashSet<GameObject> hitEnemies)
+    private IEnumerator CoHitStop(System.Collections.Generic.HashSet<GameObject> hitEnemies, float duration)
     {
         if (hitEnemies == null || hitEnemies.Count == 0) yield break;
         
@@ -512,7 +728,7 @@ public class PlayerCombat : MonoBehaviourPun
         
         // Wait for hit-stop duration while keeping enemies stopped
         float elapsed = 0f;
-        while (elapsed < hitStopDuration)
+        while (elapsed < duration)
         {
             // Continuously stop enemy movement during hit-stop
             foreach (var enemyController in enemyControllers)
@@ -549,6 +765,7 @@ public class PlayerCombat : MonoBehaviourPun
         
         // Enemy movement will resume naturally through their AI update
         
+        // Clear hit-stop coroutine reference (important for input blocking)
         hitStopCoroutine = null;
     }
     
@@ -557,14 +774,58 @@ public class PlayerCombat : MonoBehaviourPun
         if (currentComboIndex > 0 || comboWindowTimer > 0f)
         {
             Debug.Log("[Combo] Combo reset");
+            OnComboReset?.Invoke();
         }
         currentComboIndex = 0;
         comboWindowTimer = 0f;
+        hasBufferedInput = false;
+        comboInputBufferTimer = 0f;
+        
+        // Stop any ongoing attack coroutine
+        if (currentAttackCoroutine != null)
+        {
+            StopCoroutine(currentAttackCoroutine);
+            currentAttackCoroutine = null;
+        }
+        
+        // Ensure combo state is cleared
+        isPerformingCombo = false;
         
         // Reset animator combo index
         if (animator != null && AnimatorHasParameter(animator, "ComboIndex"))
         {
             animator.SetInteger("ComboIndex", 0);
+        }
+    }
+    
+    private void PlayComboHitEffects(int comboIndex)
+    {
+        // Play VFX — broadcast to all clients
+        if (comboHitVFX != null && comboIndex < comboHitVFX.Length && comboHitVFX[comboIndex] != null)
+        {
+            Vector3 spawnPos = attackRangeOrigin != null ? attackRangeOrigin.position : transform.position;
+            spawnPos += transform.forward * (attackRange * 0.5f);
+
+            if (photonView != null && PhotonNetwork.IsConnected)
+            {
+                photonView.RPC(nameof(RpcSpawnComboHitVFX), RpcTarget.All, comboIndex, spawnPos, transform.rotation);
+            }
+            else
+            {
+                SpawnComboHitVFXLocal(comboIndex, spawnPos, transform.rotation);
+            }
+        }
+        
+        // Play audio (prefer EffectsManager, then PlayerAudioManager)
+        bool isArmed = equipmentManager != null && equipmentManager.equippedItem != null;
+        if (effectsManager != null)
+            effectsManager.PlayAttackSound(isArmed, comboIndex);
+        else if (audioManager != null)
+            audioManager.PlayAttackSound(isArmed, comboIndex);
+        else if (comboHitSounds != null && comboIndex < comboHitSounds.Length && comboHitSounds[comboIndex] != null && audioSource != null)
+        {
+            // Fallback to direct audio source
+            audioSource.PlayOneShot(comboHitSounds[comboIndex]);
         }
     }
     
@@ -583,6 +844,119 @@ public class PlayerCombat : MonoBehaviourPun
     
     // power stealing is granted by enemy death logic (PowerDropOnDeath) and quest updates handled there
 
+    private void SpawnHitImpactVFX(GameObject enemy, Vector3 attackOrigin, Vector3 attackDirection)
+    {
+        if (hitImpactVFX == null) return;
+        
+        Vector3 hitPosition;
+        Vector3 hitNormal;
+        
+        // Find the hit point on the enemy
+        if (useRaycastForHitPoint)
+        {
+            // Use raycast to find exact hit point on enemy collider
+            Vector3 rayOrigin = attackOrigin;
+            Vector3 rayDirection = (enemy.transform.position - attackOrigin).normalized;
+            
+            // Try to find the closest point on the enemy's collider
+            Collider enemyCollider = enemy.GetComponent<Collider>();
+            if (enemyCollider == null)
+                enemyCollider = enemy.GetComponentInChildren<Collider>();
+            
+            if (enemyCollider != null)
+            {
+                // Get closest point on collider bounds to attack origin
+                Vector3 closestPoint = enemyCollider.ClosestPoint(attackOrigin);
+                
+                // Raycast from attack origin to closest point to get surface normal
+                RaycastHit hit;
+                Vector3 rayToClosest = (closestPoint - attackOrigin).normalized;
+                float distance = Vector3.Distance(attackOrigin, closestPoint);
+                
+                if (Physics.Raycast(attackOrigin, rayToClosest, out hit, distance + 0.5f, enemyLayers))
+                {
+                    if (hit.collider != null && (hit.collider.gameObject == enemy || hit.collider.transform.IsChildOf(enemy.transform)))
+                    {
+                        hitPosition = hit.point;
+                        hitNormal = hit.normal;
+                    }
+                    else
+                    {
+                        // Fallback: use closest point with default normal
+                        hitPosition = closestPoint;
+                        hitNormal = -rayToClosest;
+                    }
+                }
+                else
+                {
+                    // Fallback: use closest point with default normal
+                    hitPosition = closestPoint;
+                    hitNormal = -rayToClosest;
+                }
+            }
+            else
+            {
+                // No collider found, use enemy position with offset
+                hitPosition = enemy.transform.position + Vector3.up * hitVFXHeightOffset;
+                hitNormal = -attackDirection.normalized;
+            }
+        }
+        else
+        {
+            // Simple approach: use enemy position with height offset
+            hitPosition = enemy.transform.position + Vector3.up * hitVFXHeightOffset;
+            hitNormal = -attackDirection.normalized;
+        }
+        
+        // Calculate rotation to face away from impact (or towards player)
+        Quaternion hitRotation = Quaternion.LookRotation(hitNormal);
+        
+        // broadcast to all clients so every player sees the hit vfx
+        if (photonView != null && PhotonNetwork.IsConnected)
+        {
+            photonView.RPC(nameof(RpcSpawnHitImpactVFX), RpcTarget.All, hitPosition, hitRotation);
+        }
+        else
+        {
+            SpawnHitImpactVFXLocal(hitPosition, hitRotation);
+        }
+    }
+
+    [PunRPC]
+    private void RpcSpawnHitImpactVFX(Vector3 position, Quaternion rotation)
+    {
+        SpawnHitImpactVFXLocal(position, rotation);
+    }
+
+    private void SpawnHitImpactVFXLocal(Vector3 position, Quaternion rotation)
+    {
+        if (hitImpactVFX == null) return;
+
+        GameObject vfxInstance = Instantiate(hitImpactVFX, position, rotation);
+        if (vfxInstance != null)
+        {
+            float destroyTime = 2f;
+            var ps = vfxInstance.GetComponent<ParticleSystem>();
+            if (ps != null)
+            {
+                destroyTime = ps.main.duration + ps.main.startLifetime.constantMax + 0.5f;
+            }
+            Destroy(vfxInstance, destroyTime);
+        }
+    }
+    
+    [PunRPC]
+    private void RpcSpawnComboHitVFX(int comboIndex, Vector3 position, Quaternion rotation)
+    {
+        SpawnComboHitVFXLocal(comboIndex, position, rotation);
+    }
+
+    private void SpawnComboHitVFXLocal(int comboIndex, Vector3 position, Quaternion rotation)
+    {
+        if (comboHitVFX == null || comboIndex >= comboHitVFX.Length || comboHitVFX[comboIndex] == null) return;
+        Instantiate(comboHitVFX[comboIndex], position, rotation);
+    }
+
     private bool AnimatorHasParameter(Animator anim, string paramName)
     {
         if (anim == null) return false;
@@ -593,6 +967,28 @@ public class PlayerCombat : MonoBehaviourPun
         return false;
     }
 
+    void OnDestroy()
+    {
+        // Stop all coroutines to prevent leaks
+        if (currentAttackCoroutine != null)
+        {
+            StopCoroutine(currentAttackCoroutine);
+            currentAttackCoroutine = null;
+        }
+        if (hitStopCoroutine != null)
+        {
+            StopCoroutine(hitStopCoroutine);
+            hitStopCoroutine = null;
+        }
+        StopAllCoroutines();
+        
+        // Clear event subscriptions
+        OnComboHit = null;
+        OnComboProgress = null;
+        OnComboReset = null;
+        OnComboComplete = null;
+    }
+    
     void OnDrawGizmosSelected()
     {
         Gizmos.color = Color.red;

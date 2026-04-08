@@ -63,7 +63,6 @@ public class AswangQueenAI : BaseEnemyAI
     private float lastSwarmTime = -9999f;
     private float lastAnySkillRecoveryEnd = -9999f;
     private float lastAnySkillRecoveryStart = -9999f;
-    private AudioSource audioSource;
     private Coroutine activeAbility;
     private Coroutine basicRoutine;
     private Coroutine swarmCoroutine; // For DoT ticks
@@ -73,11 +72,7 @@ public class AswangQueenAI : BaseEnemyAI
     public float PounceCooldownRemaining => Mathf.Max(0f, pounceCooldown - (Time.time - lastPounceTime));
     public float SwarmCooldownRemaining => Mathf.Max(0f, swarmCooldown - (Time.time - lastSwarmTime));
 
-    protected override void InitializeEnemy()
-    {
-        audioSource = GetComponent<AudioSource>();
-        if (audioSource == null) audioSource = gameObject.AddComponent<AudioSource>();
-    }
+    protected override void InitializeEnemy() { }
 
     protected override void BuildBehaviorTree()
     {
@@ -85,7 +80,7 @@ public class AswangQueenAI : BaseEnemyAI
         var hasTarget = new ConditionNode(blackboard, HasTarget, "has_target");
         var targetInDetection = new ConditionNode(blackboard, TargetInDetectionRange, "in_detect_range");
         var moveToTarget = new ActionNode(blackboard, MoveTowardsTarget, "move_to_target");
-        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRange, "in_attack_range");
+        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRangeAndFacing, "in_attack_range_facing");
         var basicAttack = new ActionNode(blackboard, () => { PerformBasicAttack(); return NodeState.Success; }, "basic");
         var canPounce = new ConditionNode(blackboard, CanPounce, "can_pounce");
         var doPounce = new ActionNode(blackboard, () => { StartPounce(); return NodeState.Success; }, "pounce");
@@ -126,21 +121,24 @@ public class AswangQueenAI : BaseEnemyAI
     private IEnumerator CoBasicAttack(Transform target)
     {
         BeginAction(AIState.BasicAttack);
+        Quaternion lockedRotation = transform.rotation;
 
         // Windup animation trigger
         if (animator != null)
         {
             if (HasTrigger(attackWindupTrigger))
-                animator.SetTrigger(attackWindupTrigger);
+                SetTriggerSync(attackWindupTrigger);
             else if (HasTrigger(attackTrigger))
-                animator.SetTrigger(attackTrigger);
+                SetTriggerSync(attackTrigger);
         }
+        PlayAttackWindupSfx();
 
-        // Windup phase - freeze movement during windup
+        // Windup phase - lock position and rotation
         float windup = Mathf.Max(0f, enemyData.attackWindup);
         while (windup > 0f)
         {
             windup -= Time.deltaTime;
+            transform.rotation = lockedRotation;
             if (controller != null && controller.enabled)
                 controller.SimpleMove(Vector3.zero);
             yield return null;
@@ -148,7 +146,8 @@ public class AswangQueenAI : BaseEnemyAI
 
         // Impact animation trigger
         if (animator != null && HasTrigger(attackImpactTrigger))
-            animator.SetTrigger(attackImpactTrigger);
+            SetTriggerSync(attackImpactTrigger);
+        PlayAttackImpactSfx();
 
         // Apply damage after windup
         float radius = Mathf.Max(0.8f, enemyData.attackRange);
@@ -157,17 +156,20 @@ public class AswangQueenAI : BaseEnemyAI
         foreach (var c in cols)
         {
             var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null) ps.TakeDamage(enemyData.basicDamage);
+            if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, enemyData.basicDamage);
         }
 
-        // Post-stop using attackMoveLock duration
+        // Exhausted phase - lock position, rotation, set Exhausted animator
         float post = Mathf.Max(0.1f, enemyData.attackMoveLock);
+        if (post > 0f && HasBool("Exhausted")) SetBoolSync("Exhausted", true);
         while (post > 0f)
         {
             post -= Time.deltaTime;
+            transform.rotation = lockedRotation;
             if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
             yield return null;
         }
+        if (HasBool("Exhausted")) SetBoolSync("Exhausted", false);
 
         lastAttackTime = Time.time;
         attackLockTimer = enemyData.attackMoveLock;
@@ -221,7 +223,7 @@ public class AswangQueenAI : BaseEnemyAI
         }
 
         // Windup animation trigger
-        if (animator != null && HasTrigger(pounceWindupTrigger)) animator.SetTrigger(pounceWindupTrigger);
+        if (animator != null && HasTrigger(pounceWindupTrigger)) SetTriggerSync(pounceWindupTrigger);
         // Windup VFX/SFX
         if (audioSource != null && pounceWindupSFX != null)
         {
@@ -261,10 +263,10 @@ public class AswangQueenAI : BaseEnemyAI
             fx.transform.localPosition = pounceImpactVFXOffset;
             if (pounceImpactVFXScale > 0f) fx.transform.localScale = Vector3.one * pounceImpactVFXScale;
         }
-        if (audioSource != null && pounceImpactSFX != null) audioSource.PlayOneShot(pounceImpactSFX);
+        PlaySfx(pounceImpactSFX);
 
         // Pounce animation trigger
-        if (animator != null && HasTrigger(pounceTrigger)) animator.SetTrigger(pounceTrigger);
+        if (animator != null && HasTrigger(pounceTrigger)) SetTriggerSync(pounceTrigger);
 
         // Forward leap (parabolic arc)
         Vector3 startPos = transform.position;
@@ -306,7 +308,7 @@ public class AswangQueenAI : BaseEnemyAI
                     var playerStats = hit.GetComponent<PlayerStats>();
                     if (playerStats != null && !hitPlayers.Contains(playerStats))
                     {
-                        playerStats.TakeDamage(pounceDamage);
+                        DamageRelay.ApplyToPlayer(playerStats.gameObject, pounceDamage);
                         hitPlayers.Add(playerStats);
                     }
                 }
@@ -330,7 +332,7 @@ public class AswangQueenAI : BaseEnemyAI
         // Stoppage recovery (AI frozen after attack)
         if (pounceStoppageTime > 0f)
         {
-            if (animator != null && HasTrigger(skillStoppageTrigger)) animator.SetTrigger(skillStoppageTrigger);
+            if (animator != null && HasTrigger(skillStoppageTrigger)) SetTriggerSync(skillStoppageTrigger);
 
             float stopTimer = pounceStoppageTime;
             float quarterStoppage = pounceStoppageTime * 0.75f;
@@ -344,14 +346,14 @@ public class AswangQueenAI : BaseEnemyAI
                 // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
                 if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
                 {
-                    animator.SetBool("Exhausted", true);
+                    SetBoolSync("Exhausted", true);
                 }
 
                 yield return null;
             }
 
             // Clear Exhausted boolean parameter
-            if (animator != null) animator.SetBool("Exhausted", false);
+            if (animator != null) SetBoolSync("Exhausted", false);
         }
 
         // End busy state so AI can move during recovery
@@ -408,9 +410,8 @@ public class AswangQueenAI : BaseEnemyAI
 
         // Windup phase - separate trigger, VFX, and SFX
         if (animator != null && HasTrigger(swarmWindupTrigger))
-            animator.SetTrigger(swarmWindupTrigger);
-        if (audioSource != null && swarmWindupSFX != null)
-            audioSource.PlayOneShot(swarmWindupSFX);
+            SetTriggerSync(swarmWindupTrigger);
+        PlaySfx(swarmWindupSFX);
         GameObject wind = null;
         if (swarmWindupVFX != null)
         {
@@ -433,7 +434,7 @@ public class AswangQueenAI : BaseEnemyAI
 
         // Impact/Main phase - separate trigger, VFX, and SFX
         if (animator != null && HasTrigger(swarmMainTrigger))
-            animator.SetTrigger(swarmMainTrigger);
+            SetTriggerSync(swarmMainTrigger);
 
         if (swarmImpactVFX != null)
         {
@@ -442,8 +443,7 @@ public class AswangQueenAI : BaseEnemyAI
             if (swarmImpactVFXScale > 0f)
                 activeSwarmVFX.transform.localScale = Vector3.one * swarmImpactVFXScale;
         }
-        if (audioSource != null && swarmImpactSFX != null)
-            audioSource.PlayOneShot(swarmImpactSFX);
+        PlaySfx(swarmImpactSFX);
 
         // Start DoT ticks
         swarmCoroutine = StartCoroutine(CoSwarmDamageTicks());
@@ -451,7 +451,7 @@ public class AswangQueenAI : BaseEnemyAI
         // Stoppage recovery (AI frozen after attack)
         if (swarmStoppageTime > 0f)
         {
-            if (animator != null && HasTrigger(skillStoppageTrigger)) animator.SetTrigger(skillStoppageTrigger);
+            if (animator != null && HasTrigger(skillStoppageTrigger)) SetTriggerSync(skillStoppageTrigger);
 
             float stopTimer = swarmStoppageTime;
             float quarterStoppage = swarmStoppageTime * 0.75f;
@@ -465,14 +465,14 @@ public class AswangQueenAI : BaseEnemyAI
                 // Set Exhausted boolean parameter when 75% of stoppage time remains (skills only)
                 if (stopTimer <= quarterStoppage && animator != null && !animator.GetBool("Exhausted"))
                 {
-                    animator.SetBool("Exhausted", true);
+                    SetBoolSync("Exhausted", true);
                 }
 
                 yield return null;
             }
 
             // Clear Exhausted boolean parameter
-            if (animator != null) animator.SetBool("Exhausted", false);
+            if (animator != null) SetBoolSync("Exhausted", false);
         }
 
         // End busy state so AI can move during recovery
@@ -518,7 +518,7 @@ public class AswangQueenAI : BaseEnemyAI
             foreach (var c in cols)
             {
                 var ps = c.GetComponentInParent<PlayerStats>();
-                if (ps != null) ps.TakeDamage(swarmTickDamage);
+        if (ps != null) DamageRelay.ApplyToPlayer(ps.gameObject, swarmTickDamage);
             }
             yield return new WaitForSeconds(swarmTickInterval);
         }

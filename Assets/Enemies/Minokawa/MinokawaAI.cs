@@ -2,61 +2,93 @@ using UnityEngine;
 using Photon.Pun;
 using AlbuRIOT.AI.BehaviorTree;
 using System.Collections;
+using System.Collections.Generic;
 
 [RequireComponent(typeof(CharacterController))]
 [DisallowMultipleComponent]
 public class MinokawaAI : BaseEnemyAI
 {
-    [Header("Solar Wrath (line cleave)")]
-    public int solarDamage = 45;
-    public float solarRange = 12f;
-    public float solarWidth = 2.0f;
-    public float solarWindup = 0.8f;
-    public float solarCooldown = 12f;
-    public string solarTrigger = "SolarWrath";
+    private enum MinokawaSkill { None, Spitfire, Moon, Dive }
 
-    [Header("Wings of Judgment (AOE)")]
-    public int wingsDamage = 14;
-    public float wingsRadius = 4.0f;
-    public float wingsWindup = 0.6f;
-    public float wingsCooldown = 10f;
-    public string wingsTrigger = "Wings";
+    [Header("Spitfire (Projectile Burst)")]
+    public string spitfireProjectilePrefabPath = "Enemies/Projectiles/Belly Laugh";
+    public Transform spitfireMuzzle;
+    public int spitfireDamage = 14;
+    public int spitfireProjectileCount = 3;
+    public float spitfireSpreadDeg = 18f;
+    public float spitfireProjectileSpeed = 18f;
+    public float spitfireProjectileLifetime = 2.5f;
+    public float spitfireProjectileRange = 16f;
+    public float spitfireWindup = 0.55f;
+    public float spitfireCooldown = 9f;
+    public string spitfireWindupTrigger = "SpitfireWindup";
+    public string spitfireTrigger = "Spitfire";
+    public AudioClip spitfireWindupSFX;
+    public AudioClip spitfireImpactSFX;
+    public GameObject spitfireWindupVFX;
+    public GameObject spitfireImpactVFX;
+    public Vector3 spitfireVFXOffset = Vector3.zero;
+    public float spitfireVFXScale = 1f;
+    public float spitfireStoppageTime = 0.5f;
+    public float spitfireRecoveryTime = 0.25f;
 
-    [Header("Skill Selection Tuning")]
-    public float solarPreferredMinDistance = 4f;
-    public float solarPreferredMaxDistance = 13f;
-    [Range(0f, 1f)] public float solarSkillWeight = 0.7f;
-    [SerializeField] private float solarStoppageTime = 1f;
-    public float wingsPreferredMinDistance = 2f;
-    public float wingsPreferredMaxDistance = 7f;
-    [Range(0f, 1f)] public float wingsSkillWeight = 0.85f;
-    [SerializeField] private float wingsStoppageTime = 1f;
+    [Header("Moon Attack (Ground AoE)")]
+    public int moonTickDamage = 12;
+    public float moonRadius = 5f;
+    public int moonTicks = 6;
+    public float moonTickInterval = 0.35f;
+    public float moonWindup = 0.7f;
+    public float moonCooldown = 10f;
+    public string moonWindupTrigger = "MoonWindup";
+    public string moonTrigger = "MoonAttack";
+    public AudioClip moonWindupSFX;
+    public AudioClip moonImpactSFX;
+    public GameObject moonTelegraphVFX;
+    public GameObject moonImpactVFX;
+    public float moonStoppageTime = 0.7f;
+    public float moonRecoveryTime = 0.35f;
 
-    private float lastSolarTime = -9999f;
-    private float lastWingsTime = -9999f;
+    [Header("Dive Attack")]
+    public int diveDamage = 28;
+    public float diveHitRadius = 1.8f;
+    public float diveWindup = 0.55f;
+    public float diveCooldown = 12f;
+    public float diveAscendTime = 0.35f;
+    public float diveAscendSpeed = 4f;
+    public float diveDescendSpeed = 18f;
+    public float diveTravelTime = 0.8f;
+    public string diveWindupTrigger = "DiveWindup";
+    public string diveTrigger = "Dive";
+    public AudioClip diveWindupSFX;
+    public AudioClip diveImpactSFX;
+    public GameObject diveWindupVFX;
+    public GameObject diveImpactVFX;
+    public Vector3 diveVFXOffset = Vector3.zero;
+    public float diveVFXScale = 1f;
+    public float diveStoppageTime = 0.9f;
+    public float diveRecoveryTime = 0.4f;
+
+    [Header("Skill Selection (Distance/Weight)")]
+    public float spitfirePreferredMinDistance = 6f;
+    public float spitfirePreferredMaxDistance = 14f;
+    [Range(0f, 1f)] public float spitfireSkillWeight = 0.8f;
+    public float moonPreferredMinDistance = 3f;
+    public float moonPreferredMaxDistance = 8f;
+    [Range(0f, 1f)] public float moonSkillWeight = 0.85f;
+    public float divePreferredMinDistance = 5f;
+    public float divePreferredMaxDistance = 12f;
+    [Range(0f, 1f)] public float diveSkillWeight = 0.75f;
+    [Range(0f, 1f)] public float minSkillScoreToCast = 0.15f;
+
+    private float lastSpitfireTime = -9999f;
+    private float lastMoonTime = -9999f;
+    private float lastDiveTime = -9999f;
+    private Coroutine activeAbility;
+    private MinokawaSkill queuedSkill = MinokawaSkill.None;
 
     protected override void InitializeEnemy()
     {
-        // No special initialization required for now
-    }
-
-    protected override void PerformBasicAttack()
-    {
-        if (enemyData == null) return;
-        if (Time.time - lastAttackTime < enemyData.attackCooldown) return;
-        var target = blackboard.Get<Transform>("target");
-        if (target == null) return;
-        if (animator != null && HasTrigger(attackTrigger)) animator.SetTrigger(attackTrigger);
-        float radius = Mathf.Max(0.8f, enemyData.attackRange);
-        Vector3 center = transform.position + transform.forward * (enemyData.attackRange * 0.5f);
-        var cols = Physics.OverlapSphere(center, radius, LayerMask.GetMask("Player"));
-        foreach (var c in cols)
-        {
-            var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null) ps.TakeDamage(enemyData.basicDamage);
-        }
-        lastAttackTime = Time.time;
-        attackLockTimer = enemyData.attackMoveLock;
+        // no special initialization required
     }
 
     protected override void BuildBehaviorTree()
@@ -64,13 +96,11 @@ public class MinokawaAI : BaseEnemyAI
         var updateTarget = new ActionNode(blackboard, UpdateTarget, "update_target");
         var hasTarget = new ConditionNode(blackboard, HasTarget, "has_target");
         var targetInDetection = new ConditionNode(blackboard, TargetInDetectionRange, "in_detect_range");
-        var moveToTarget = new ActionNode(blackboard, MoveTowardsTarget, "move_to_target");
-        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRange, "in_attack_range");
+        var canSkill = new ConditionNode(blackboard, CanCastWeightedSkill, "can_weighted_skill");
+        var doSkill = new ActionNode(blackboard, ExecuteWeightedSkill, "do_weighted_skill");
+        var targetInAttack = new ConditionNode(blackboard, TargetInAttackRangeAndFacing, "in_attack_range_facing");
         var basicAttack = new ActionNode(blackboard, () => { PerformBasicAttack(); return NodeState.Success; }, "basic");
-        var canSolar = new ConditionNode(blackboard, CanSolar, "can_solar");
-        var doSolar = new ActionNode(blackboard, () => { StartSolar(); return NodeState.Success; }, "solar");
-        var canWings = new ConditionNode(blackboard, CanWings, "can_wings");
-        var doWings = new ActionNode(blackboard, () => { StartWings(); return NodeState.Success; }, "wings");
+        var moveToTarget = new ActionNode(blackboard, MoveTowardsTarget, "move_to_target");
 
         behaviorTree = new Selector(blackboard, "root")
             .Add(
@@ -79,8 +109,7 @@ public class MinokawaAI : BaseEnemyAI
                     hasTarget,
                     targetInDetection,
                     new Selector(blackboard, "attack_opts").Add(
-                        new Sequence(blackboard, "solar_seq").Add(canSolar, doSolar),
-                        new Sequence(blackboard, "wings_seq").Add(canWings, doWings),
+                        new Sequence(blackboard, "skill_seq").Add(canSkill, doSkill),
                         new Sequence(blackboard, "basic_seq").Add(targetInAttack, basicAttack),
                         moveToTarget
                     )
@@ -89,97 +118,408 @@ public class MinokawaAI : BaseEnemyAI
             );
     }
 
+    protected override void PerformBasicAttack()
+    {
+        if (activeAbility != null || isBusy) return;
+        if (enemyData == null) return;
+        if (Time.time - lastAttackTime < enemyData.attackCooldown) return;
+
+        var target = blackboard.Get<Transform>("target");
+        if (target == null) return;
+
+        if (animator != null && HasTrigger(attackTrigger))
+            SetTriggerSync(attackTrigger);
+        PlayAttackWindupSfx();
+
+        float radius = Mathf.Max(0.8f, enemyData.attackRange);
+        Vector3 center = transform.position + transform.forward * (enemyData.attackRange * 0.5f);
+        Collider[] cols = Physics.OverlapSphere(center, radius, LayerMask.GetMask("Player"));
+
+        PlayAttackImpactSfx();
+        for (int i = 0; i < cols.Length; i++)
+        {
+            PlayerStats ps = cols[i].GetComponentInParent<PlayerStats>();
+            if (ps != null)
+                DamageRelay.ApplyToPlayer(ps.gameObject, enemyData.basicDamage);
+        }
+
+        lastAttackTime = Time.time;
+        attackLockTimer = enemyData.attackMoveLock;
+    }
+
     protected override bool TrySpecialAbilities()
     {
-        if (isBusy) return false;
-        var target = blackboard.Get<Transform>("target");
-        if (target == null) return false;
-        float dist = Vector3.Distance(transform.position, target.position);
-        bool facingTarget = IsFacingTarget(target, SpecialFacingAngle);
-        bool inSolarRange = dist >= solarPreferredMinDistance && dist <= solarPreferredMaxDistance;
-        bool inWingsRange = dist >= wingsPreferredMinDistance && dist <= wingsPreferredMaxDistance;
-        float solarMid = (solarPreferredMinDistance + solarPreferredMaxDistance) * 0.5f;
-        float wingsMid = (wingsPreferredMinDistance + wingsPreferredMaxDistance) * 0.5f;
-        float solarScore = (inSolarRange && facingTarget) ? (1f - Mathf.Clamp01(Mathf.Abs(solarMid - dist) / 10f)) * solarSkillWeight : 0f;
-        float wingsScore = (inWingsRange && facingTarget) ? (1f - Mathf.Clamp01(Mathf.Abs(wingsMid - dist) / 6f)) * wingsSkillWeight : 0f;
-        if (CanSolar() && solarScore >= wingsScore && solarScore > 0.15f) { StartSolar(); return true; }
-        if (CanWings() && wingsScore > solarScore && wingsScore > 0.15f) { StartWings(); return true; }
         return false;
     }
 
-    private bool CanSolar()
+    private bool CanCastWeightedSkill()
     {
-        if (Time.time - lastSolarTime < solarCooldown) return false;
-        var target = blackboard.Get<Transform>("target");
-        return target != null;
-    }
-    private void StartSolar()
-    {
-        lastSolarTime = Time.time;
-        StartCoroutine(CoSolar());
-    }
-    private IEnumerator CoSolar()
-    {
-        if (animator != null && HasTrigger(solarTrigger)) animator.SetTrigger(solarTrigger);
-        yield return new WaitForSeconds(Mathf.Max(0f, solarWindup));
-        // line cleave: sample points along forward
-        Vector3 start = transform.position;
-        Vector3 fwd = new Vector3(transform.forward.x, 0f, transform.forward.z).normalized;
-        int samples = 8;
-        for (int i = 1; i <= samples; i++)
+        queuedSkill = MinokawaSkill.None;
+        if (isBusy || activeAbility != null) return false;
+
+        Transform target = blackboard.Get<Transform>("target");
+        if (target == null) return false;
+
+        float distance = Vector3.Distance(transform.position, target.position);
+        float bestScore = minSkillScoreToCast;
+
+        if (CanSpitfire())
         {
-            Vector3 p = start + fwd * (solarRange * i / samples);
-            var cols = Physics.OverlapSphere(p, solarWidth * 0.5f, LayerMask.GetMask("Player"));
-            foreach (var c in cols)
+            float score = ComputeRangeScore(distance, spitfirePreferredMinDistance, spitfirePreferredMaxDistance) * spitfireSkillWeight;
+            if (score > bestScore)
             {
-                var ps = c.GetComponentInParent<PlayerStats>();
-                if (ps != null) ps.TakeDamage(solarDamage);
+                bestScore = score;
+                queuedSkill = MinokawaSkill.Spitfire;
             }
         }
-        yield return null;
+
+        if (CanMoonAttack())
+        {
+            float score = ComputeRangeScore(distance, moonPreferredMinDistance, moonPreferredMaxDistance) * moonSkillWeight;
+            if (score > bestScore)
+            {
+                bestScore = score;
+                queuedSkill = MinokawaSkill.Moon;
+            }
+        }
+
+        if (CanDive())
+        {
+            float score = ComputeRangeScore(distance, divePreferredMinDistance, divePreferredMaxDistance) * diveSkillWeight;
+            if (score > bestScore)
+            {
+                bestScore = score;
+                queuedSkill = MinokawaSkill.Dive;
+            }
+        }
+
+        return queuedSkill != MinokawaSkill.None;
     }
 
-    private bool CanWings()
+    private NodeState ExecuteWeightedSkill()
     {
-        if (Time.time - lastWingsTime < wingsCooldown) return false;
-        var target = blackboard.Get<Transform>("target");
-        return target != null && Vector3.Distance(transform.position, target.position) <= wingsRadius + 1.5f;
-    }
-    private void StartWings()
-    {
-        lastWingsTime = Time.time;
-        StartCoroutine(CoWings());
-    }
-    private IEnumerator CoWings()
-    {
-        if (animator != null && HasTrigger(wingsTrigger)) animator.SetTrigger(wingsTrigger);
-        yield return new WaitForSeconds(Mathf.Max(0f, wingsWindup));
-        var cols = Physics.OverlapSphere(transform.position, wingsRadius, LayerMask.GetMask("Player"));
-        foreach (var c in cols)
+        switch (queuedSkill)
         {
-            var ps = c.GetComponentInParent<PlayerStats>();
-            if (ps != null) ps.TakeDamage(wingsDamage);
+            case MinokawaSkill.Spitfire:
+                StartSpitfire();
+                break;
+            case MinokawaSkill.Moon:
+                StartMoonAttack();
+                break;
+            case MinokawaSkill.Dive:
+                StartDive();
+                break;
+            default:
+                return NodeState.Failure;
+        }
+
+        queuedSkill = MinokawaSkill.None;
+        return NodeState.Success;
+    }
+
+    private float ComputeRangeScore(float distance, float minDistance, float maxDistance)
+    {
+        if (maxDistance <= minDistance)
+            return 0f;
+        if (distance < minDistance || distance > maxDistance)
+            return 0f;
+
+        float mid = (minDistance + maxDistance) * 0.5f;
+        float half = Mathf.Max(0.01f, (maxDistance - minDistance) * 0.5f);
+        return 1f - Mathf.Clamp01(Mathf.Abs(distance - mid) / half);
+    }
+
+    private bool CanSpitfire()
+    {
+        if (Time.time - lastSpitfireTime < spitfireCooldown) return false;
+        Transform target = blackboard.Get<Transform>("target");
+        return target != null && IsFacingTarget(target, SpecialFacingAngle);
+    }
+
+    private void StartSpitfire()
+    {
+        if (activeAbility != null) return;
+        lastSpitfireTime = Time.time;
+        if (enemyData != null) lastAttackTime = Time.time;
+        activeAbility = StartCoroutine(CoSpitfire());
+    }
+
+    private IEnumerator CoSpitfire()
+    {
+        BeginAction(AIState.Special1);
+        Quaternion lockedRotation = transform.rotation;
+
+        try
+        {
+            if (HasTrigger(spitfireWindupTrigger)) SetTriggerSync(spitfireWindupTrigger);
+            else if (HasTrigger(spitfireTrigger)) SetTriggerSync(spitfireTrigger);
+            PlaySfx(spitfireWindupSFX);
+            SpawnTimedVFX(spitfireWindupVFX, spitfireVFXOffset, spitfireVFXScale, spitfireWindup + 0.25f);
+
+            float windup = Mathf.Max(0f, spitfireWindup);
+            while (windup > 0f)
+            {
+                windup -= Time.deltaTime;
+                transform.rotation = lockedRotation;
+                if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+                yield return null;
+            }
+
+            if (HasTrigger(spitfireTrigger)) SetTriggerSync(spitfireTrigger);
+            PlaySfx(spitfireImpactSFX);
+            SpawnTimedVFX(spitfireImpactVFX, spitfireVFXOffset, spitfireVFXScale, 1.2f);
+
+            Vector3 spawnPos = spitfireMuzzle != null ? spitfireMuzzle.position : (transform.position + transform.forward * 1.5f + Vector3.up);
+            int count = Mathf.Max(1, spitfireProjectileCount);
+            float step = count > 1 ? spitfireSpreadDeg / (count - 1) : 0f;
+            float startYaw = -spitfireSpreadDeg * 0.5f;
+
+            for (int i = 0; i < count; i++)
+            {
+                float yaw = startYaw + step * i;
+                Quaternion rot = transform.rotation * Quaternion.Euler(0f, yaw, 0f);
+                GameObject projectile = SpawnProjectile(spitfireProjectilePrefabPath, spawnPos, rot);
+                if (projectile == null) continue;
+
+                EnemyProjectile projectileComp = projectile.GetComponent<EnemyProjectile>();
+                if (projectileComp == null) continue;
+
+                projectileComp.Initialize(gameObject, spitfireDamage, spitfireProjectileSpeed, spitfireProjectileLifetime, null);
+                projectileComp.maxDistance = spitfireProjectileRange;
+            }
+
+            yield return StartCoroutine(DoStoppageAndRecovery(lockedRotation, spitfireStoppageTime, spitfireRecoveryTime));
+        }
+        finally
+        {
+            if (isBusy) EndAction();
+            activeAbility = null;
         }
     }
 
-    private bool IsFacingTarget(Transform target, float maxAngle)
+    private bool CanMoonAttack()
     {
-        Vector3 to = target.position - transform.position;
-        to.y = 0f;
-        if (to.sqrMagnitude < 0.0001f) return false;
-        float angle = Vector3.Angle(new Vector3(transform.forward.x, 0f, transform.forward.z).normalized, to.normalized);
-        return angle <= Mathf.Clamp(maxAngle, 1f, 60f);
+        if (Time.time - lastMoonTime < moonCooldown) return false;
+        return blackboard.Get<Transform>("target") != null;
     }
-    private void FaceTarget(Transform target)
+
+    private void StartMoonAttack()
     {
-        Vector3 look = new Vector3(target.position.x, transform.position.y, target.position.z);
-        Vector3 dir = (look - transform.position);
-        if (dir.sqrMagnitude > 0.0001f)
+        if (activeAbility != null) return;
+        lastMoonTime = Time.time;
+        if (enemyData != null) lastAttackTime = Time.time;
+        activeAbility = StartCoroutine(CoMoonAttack());
+    }
+
+    private IEnumerator CoMoonAttack()
+    {
+        BeginAction(AIState.Special2);
+        Quaternion lockedRotation = transform.rotation;
+        Transform target = blackboard.Get<Transform>("target");
+        Vector3 castPosition = target != null ? target.position : transform.position;
+
+        try
         {
-            Quaternion targetRot = Quaternion.LookRotation(dir);
-            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRot, RotationSpeed * Time.deltaTime);
+            if (HasTrigger(moonWindupTrigger)) SetTriggerSync(moonWindupTrigger);
+            else if (HasTrigger(moonTrigger)) SetTriggerSync(moonTrigger);
+            PlaySfx(moonWindupSFX);
+            SpawnWorldTimedVFX(moonTelegraphVFX, castPosition, Quaternion.identity, moonWindup + 0.35f);
+
+            float windup = Mathf.Max(0f, moonWindup);
+            while (windup > 0f)
+            {
+                windup -= Time.deltaTime;
+                transform.rotation = lockedRotation;
+                if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+                yield return null;
+            }
+
+            if (HasTrigger(moonTrigger)) SetTriggerSync(moonTrigger);
+            PlaySfx(moonImpactSFX);
+            SpawnWorldTimedVFX(moonImpactVFX, castPosition, Quaternion.identity, Mathf.Max(1f, moonTicks * moonTickInterval));
+
+            int tickCount = Mathf.Max(1, moonTicks);
+            float tickInterval = Mathf.Max(0.05f, moonTickInterval);
+            for (int i = 0; i < tickCount; i++)
+            {
+                Collider[] hits = Physics.OverlapSphere(castPosition, moonRadius, LayerMask.GetMask("Player"));
+                for (int h = 0; h < hits.Length; h++)
+                {
+                    PlayerStats ps = hits[h].GetComponentInParent<PlayerStats>();
+                    if (ps != null)
+                        DamageRelay.ApplyToPlayer(ps.gameObject, moonTickDamage);
+                }
+
+                yield return new WaitForSeconds(tickInterval);
+            }
+
+            yield return StartCoroutine(DoStoppageAndRecovery(lockedRotation, moonStoppageTime, moonRecoveryTime));
         }
-        if (controller != null && controller.enabled)
-            controller.SimpleMove(Vector3.zero);
+        finally
+        {
+            if (isBusy) EndAction();
+            activeAbility = null;
+        }
+    }
+
+    private bool CanDive()
+    {
+        if (Time.time - lastDiveTime < diveCooldown) return false;
+        return blackboard.Get<Transform>("target") != null;
+    }
+
+    private void StartDive()
+    {
+        if (activeAbility != null) return;
+        lastDiveTime = Time.time;
+        if (enemyData != null) lastAttackTime = Time.time;
+        activeAbility = StartCoroutine(CoDive());
+    }
+
+    private IEnumerator CoDive()
+    {
+        BeginAction(AIState.Special1);
+        Transform target = blackboard.Get<Transform>("target");
+        Vector3 diveDirection = transform.forward;
+
+        if (target != null)
+        {
+            Vector3 toTarget = target.position - transform.position;
+            toTarget.y = 0f;
+            if (toTarget.sqrMagnitude > 0.0001f)
+            {
+                diveDirection = toTarget.normalized;
+                transform.rotation = Quaternion.LookRotation(diveDirection);
+            }
+        }
+
+        try
+        {
+            if (HasTrigger(diveWindupTrigger)) SetTriggerSync(diveWindupTrigger);
+            else if (HasTrigger(diveTrigger)) SetTriggerSync(diveTrigger);
+            PlaySfx(diveWindupSFX);
+            SpawnTimedVFX(diveWindupVFX, diveVFXOffset, diveVFXScale, diveWindup + 0.25f);
+
+            float windup = Mathf.Max(0f, diveWindup);
+            while (windup > 0f)
+            {
+                windup -= Time.deltaTime;
+                transform.rotation = Quaternion.LookRotation(diveDirection);
+                if (controller != null && controller.enabled) controller.SimpleMove(Vector3.zero);
+                yield return null;
+            }
+
+            float ascend = Mathf.Max(0f, diveAscendTime);
+            while (ascend > 0f)
+            {
+                ascend -= Time.deltaTime;
+                if (controller != null && controller.enabled && diveAscendSpeed > 0f)
+                    controller.Move(Vector3.up * diveAscendSpeed * Time.deltaTime);
+                yield return null;
+            }
+
+            if (target != null)
+            {
+                Vector3 toTarget = target.position - transform.position;
+                toTarget.y = 0f;
+                if (toTarget.sqrMagnitude > 0.0001f)
+                    diveDirection = toTarget.normalized;
+            }
+
+            if (HasTrigger(diveTrigger)) SetTriggerSync(diveTrigger);
+            HashSet<PlayerStats> hitPlayers = new HashSet<PlayerStats>();
+            float travel = Mathf.Max(0.1f, diveTravelTime);
+            while (travel > 0f)
+            {
+                travel -= Time.deltaTime;
+                transform.rotation = Quaternion.LookRotation(diveDirection);
+                if (controller != null && controller.enabled)
+                    controller.Move(diveDirection * diveDescendSpeed * Time.deltaTime);
+
+                Collider[] hits = Physics.OverlapSphere(transform.position, diveHitRadius, LayerMask.GetMask("Player"));
+                for (int i = 0; i < hits.Length; i++)
+                {
+                    PlayerStats ps = hits[i].GetComponentInParent<PlayerStats>();
+                    if (ps == null || hitPlayers.Contains(ps)) continue;
+                    hitPlayers.Add(ps);
+                    DamageRelay.ApplyToPlayer(ps.gameObject, diveDamage);
+                }
+
+                yield return null;
+            }
+
+            PlaySfx(diveImpactSFX);
+            SpawnTimedVFX(diveImpactVFX, diveVFXOffset, diveVFXScale, 1.2f);
+
+            Quaternion lockedRotation = transform.rotation;
+            yield return StartCoroutine(DoStoppageAndRecovery(lockedRotation, diveStoppageTime, diveRecoveryTime));
+        }
+        finally
+        {
+            if (isBusy) EndAction();
+            activeAbility = null;
+        }
+    }
+
+    private IEnumerator DoStoppageAndRecovery(Quaternion lockedRotation, float stoppageTime, float recoveryTime)
+    {
+        if (stoppageTime > 0f)
+        {
+            float timer = stoppageTime;
+            float exhaustedStart = stoppageTime * 0.75f;
+            while (timer > 0f)
+            {
+                timer -= Time.deltaTime;
+                transform.rotation = lockedRotation;
+                if (controller != null && controller.enabled)
+                    controller.SimpleMove(Vector3.zero);
+
+                if (timer <= exhaustedStart && HasBool("Exhausted"))
+                    SetBoolSync("Exhausted", true);
+
+                yield return null;
+            }
+            if (HasBool("Exhausted"))
+                SetBoolSync("Exhausted", false);
+        }
+
+        if (recoveryTime > 0f)
+            yield return new WaitForSeconds(recoveryTime);
+    }
+
+    private GameObject SpawnProjectile(string resourcePath, Vector3 position, Quaternion rotation)
+    {
+        if (string.IsNullOrEmpty(resourcePath))
+            return null;
+
+        if (PhotonNetwork.IsConnected && !PhotonNetwork.OfflineMode)
+            return PhotonNetwork.Instantiate(resourcePath, position, rotation);
+
+        GameObject prefab = Resources.Load<GameObject>(resourcePath);
+        if (prefab == null)
+        {
+            Debug.LogWarning("[MinokawaAI] Missing projectile prefab at Resources path: " + resourcePath);
+            return null;
+        }
+
+        return Instantiate(prefab, position, rotation);
+    }
+
+    private void SpawnTimedVFX(GameObject prefab, Vector3 localOffset, float scale, float lifetime)
+    {
+        if (prefab == null) return;
+        GameObject fx = Instantiate(prefab, transform);
+        fx.transform.localPosition = localOffset;
+        fx.transform.localRotation = Quaternion.identity;
+        if (scale > 0f)
+            fx.transform.localScale = Vector3.one * scale;
+        Destroy(fx, Mathf.Max(0.1f, lifetime));
+    }
+
+    private void SpawnWorldTimedVFX(GameObject prefab, Vector3 worldPos, Quaternion worldRot, float lifetime)
+    {
+        if (prefab == null) return;
+        GameObject fx = Instantiate(prefab, worldPos, worldRot);
+        Destroy(fx, Mathf.Max(0.1f, lifetime));
     }
 }

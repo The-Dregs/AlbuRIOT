@@ -40,6 +40,11 @@ public class ItemManager : MonoBehaviour
         InitializeItemLookup();
     }
     
+    void OnDestroy()
+    {
+        if (Instance == this) Instance = null;
+    }
+
     private void InitializeItemLookup()
     {
         itemLookup = new Dictionary<string, ItemData>();

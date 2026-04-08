@@ -1,6 +1,4 @@
 using UnityEngine;
-using System.IO;
-using System.Collections.Generic;
 
 public class ShopTradeJsonLoader : MonoBehaviour
 {
@@ -13,11 +11,11 @@ public class ShopTradeJsonLoader : MonoBehaviour
     {
         public string tradeName;
         public string description;
-        public string[] requiredItemNames; // Item names instead of ItemData references
+        public string[] requiredItemNames;
         public int[] requiredQuantities;
         public string rewardItemName;
         public int rewardQuantity = 1;
-        public int maxUses = -1; // -1 for unlimited
+        public int maxUses = -1;
         public bool requiresUnlock = false;
         public string[] requiredShrineIds;
         public string[] requiredQuestIds;
@@ -43,63 +41,52 @@ public class ShopTradeJsonLoader : MonoBehaviour
             return;
         }
         
-        TextAsset file = Resources.Load<TextAsset>("Trades/" + tradeJsonFile);
+        var file = Resources.Load<TextAsset>("Trades/" + tradeJsonFile);
         if (file == null)
         {
             Debug.LogError($"ShopTradeJsonLoader: Could not load trade JSON: {tradeJsonFile}");
             return;
         }
         
-        ShopTradeDataContainer container = JsonUtility.FromJson<ShopTradeDataContainer>(file.text);
+        var container = JsonUtility.FromJson<ShopTradeDataContainer>(file.text);
         if (container == null || container.trades == null)
         {
             Debug.LogError("ShopTradeJsonLoader: Failed to parse trade JSON");
             return;
         }
         
-        // Convert JSON data to ShopTradeData ScriptableObjects
-        ShopTradeData[] shopTrades = new ShopTradeData[container.trades.Length];
-        ItemManager itemManager = ItemManager.Instance;
-        
-        if (itemManager == null)
+        var db = ItemDatabase.Load();
+        if (db == null)
         {
-            Debug.LogError("ShopTradeJsonLoader: ItemManager.Instance not found!");
+            Debug.LogError("ShopTradeJsonLoader: Resources/ItemDatabase not found!");
             return;
         }
         
+        var shopTrades = new ShopTradeData[container.trades.Length];
         for (int i = 0; i < container.trades.Length; i++)
         {
-            ShopTradeDataJson tradeJson = container.trades[i];
-            
-            // Find required items by name
+            var tradeJson = container.trades[i];
             ItemData[] requiredItems = null;
             if (tradeJson.requiredItemNames != null && tradeJson.requiredItemNames.Length > 0)
             {
                 requiredItems = new ItemData[tradeJson.requiredItemNames.Length];
                 for (int j = 0; j < tradeJson.requiredItemNames.Length; j++)
                 {
-                    requiredItems[j] = itemManager.GetItemDataByName(tradeJson.requiredItemNames[j]);
+                    requiredItems[j] = db.FindByName(tradeJson.requiredItemNames[j]);
                     if (requiredItems[j] == null)
-                    {
-                        Debug.LogWarning($"ShopTradeJsonLoader: Item '{tradeJson.requiredItemNames[j]}' not found in ItemManager");
-                    }
+                        Debug.LogWarning($"ShopTradeJsonLoader: Item '{tradeJson.requiredItemNames[j]}' not found in ItemDatabase");
                 }
             }
             
-            // Find reward item by name
-            ItemData rewardItem = itemManager.GetItemDataByName(tradeJson.rewardItemName);
+            var rewardItem = db.FindByName(tradeJson.rewardItemName);
             if (rewardItem == null)
-            {
-                Debug.LogWarning($"ShopTradeJsonLoader: Reward item '{tradeJson.rewardItemName}' not found in ItemManager");
-            }
+                Debug.LogWarning($"ShopTradeJsonLoader: Reward item '{tradeJson.rewardItemName}' not found in ItemDatabase");
             
-            // Create runtime ShopTradeData object
-            ShopTradeData trade = CreateRuntimeShopTrade(tradeJson, requiredItems, rewardItem);
-            shopTrades[i] = trade;
+            shopTrades[i] = CreateRuntimeShopTrade(tradeJson, requiredItems, rewardItem);
         }
         
         shopManager.availableTrades = shopTrades;
-        Debug.Log($"ShopTradeJsonLoader: Successfully loaded {shopTrades.Length} trades from {tradeJsonFile}");
+        Debug.Log($"ShopTradeJsonLoader: Loaded {shopTrades.Length} trades from {tradeJsonFile} via ItemDatabase");
     }
     
     private ShopTradeData CreateRuntimeShopTrade(ShopTradeDataJson json, ItemData[] requiredItems, ItemData rewardItem)

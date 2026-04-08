@@ -286,7 +286,7 @@ public class DialogueManager : MonoBehaviourPunCallbacks
         if (sfxSource != null) sfxSource.Stop();
 
         // Show loading screen and load next scene
-        var loader = FindObjectOfType<LoadingScreenManager>();
+        var loader = FindFirstObjectByType<LoadingScreenManager>();
         if (loader != null)
         {
             loader.LoadSceneAsync("TUTORIAL");

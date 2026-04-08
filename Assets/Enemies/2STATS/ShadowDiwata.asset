@@ -25,7 +25,7 @@ MonoBehaviour:
   orbitSpeedMultiplier: 0.7
   desiredAttackDistanceFraction: 0.85
   attackRange: 2.4
-  attackWindup: 1.2
+  attackWindup: 1.5
   attackCooldown: 1.25
   attackMoveLock: 0.35
   detectionRange: 12
